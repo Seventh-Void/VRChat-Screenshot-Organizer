@@ -1,28 +1,19 @@
 # VRChat Organizer Windows Build Script
-Write-Host "Checking for build dependencies..." -ForegroundColor Cyan
+$PSScriptRoot = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
+$ProjectRoot = (Get-Item "$PSScriptRoot\..").FullName
 
-# Ensure we are in the correct directory
-if (!(Test-Path "gui_vrchat_organizer.py")) {
-    Write-Host "Error: gui_vrchat_organizer.py not found. Please run this script from the project root directory (e.g., .\docs\build_windows.ps1)" -ForegroundColor Red
-    exit
-}
+Write-Host "Step 1: Installing dependencies..." -ForegroundColor Cyan
+pip install pyinstaller pillow
 
-# Ensure PyInstaller and Pillow are installed
-pip install pyinstaller Pillow
+Write-Host "Step 2: Building standalone executable..." -ForegroundColor Cyan
+# --noconsole: Hides the terminal window when the GUI starts
+# --onefile: Packs everything into a single .exe
+# --clean: Clears PyInstaller cache before building
+# --name: Sets the output filename
+python -m PyInstaller --noconsole --onefile --name "VRChatOrganizer" --clean `
+    --distpath "$ProjectRoot\dist" --workpath "$ProjectRoot\build" --specpath "$ProjectRoot" "$ProjectRoot\gui_vrchat_organizer.py"
 
-Write-Host "Building VRChatOrganizer.exe..." -ForegroundColor Cyan
-
-# --onefile: Bundle into a single executable
-# --noconsole: Hide the command prompt window when running the GUI
-# --name: Set the output filename
-# --clean: Clean PyInstaller cache and remove temporary files before building
-python -m PyInstaller --onefile --noconsole --clean --name "VRChatOrganizer" "gui_vrchat_organizer.py"
-
-# Cleanup build artifacts (keeping only the .exe in dist)
-Write-Host "Cleaning up build artifacts..." -ForegroundColor Gray
-Remove-Item -Path "build" -Recurse -ErrorAction SilentlyContinue
-Remove-Item -Path "VRChatOrganizer.spec" -ErrorAction SilentlyContinue
-
-Write-Host "------------------------------------------------" -ForegroundColor Green
-Write-Host "Build Complete! Check the 'dist' folder for VRChatOrganizer.exe." -ForegroundColor Green
-Write-Host "You can now distribute this .exe without needing Python." -ForegroundColor Green
+Write-Host ""
+Write-Host "Build Complete!" -ForegroundColor Green
+Write-Host "The executable is located in: $ProjectRoot\dist\VRChatOrganizer.exe"
+pause

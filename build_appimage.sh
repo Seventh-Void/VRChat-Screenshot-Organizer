@@ -50,7 +50,7 @@ else
   echo "appimagetool not found. Downloading AppImageKit appimagetool..."
   wget -qO appimagetool-x86_64.AppImage "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
   chmod +x appimagetool-x86_64.AppImage
-  ./appimagetool-x86_64.AppImage "$APP_DIR" "$OUTPUT"
+  APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool-x86_64.AppImage "$APP_DIR" "$OUTPUT"
 fi
 
 echo "Built $OUTPUT"

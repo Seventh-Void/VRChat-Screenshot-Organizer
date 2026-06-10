@@ -11,10 +11,12 @@
 - 📁 **Smart Organization** - Creates world-named subfolders within each month folder
 - 👁️ **Preview Mode** - See what will be organized before making any changes
 - 📊 **Detailed Logging** - Track exactly what's happening with comprehensive logs and real-time GUI updates
-- 🛡️ **Safe Operations** - Automatically handles duplicate filenames and edge cases
+- 🛡️ **Safe Operations** - Automatically handles duplicate filenames and prevents overwriting
 - 🎨 **Print Handling** - Automatically separates 2048x1440 prints into a dedicated "Prints" folder
 - 📅 **Bulk Scanning** - Option to scan all historical month folders at once
-- 🌙 **Dark Mode** - Native dark theme support in the GUI for night owls
+- 🌙 **Visual Themes** - Native dark mode support and modern UI styling
+- 💡 **User Friendly** - Comprehensive tooltips and High DPI scaling support for 4K monitors
+- 🕒 **Auto-Cleanup** - GUI logs automatically clear after inactivity to stay tidy
 - ⚙️ **Autostart Setup** - Easily install startup entries for Windows and Linux (systemd)
 - 🖥️ **GUI & CLI** - Use either a graphical interface or command-line tools
 - 📦 **Standalone AppImage** - Deploy as a single executable file on Linux

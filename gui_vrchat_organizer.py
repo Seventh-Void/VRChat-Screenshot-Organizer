@@ -37,6 +37,51 @@ class TextHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
+class ToolTip:
+    """Simple ToolTip implementation for Tkinter widgets."""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.id = None
+        self.x = self.y = 0
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hide_tip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(500, self.show_tip)
+
+    def unschedule(self):
+        id_ = self.id
+        self.id = None
+        if id_:
+            self.widget.after_cancel(id_)
+
+    def show_tip(self, event=None):
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                      font=("tahoma", "9", "normal"))
+        label.pack(ipadx=1)
+
+    def hide_tip(self):
+        tw = self.tip_window
+        self.tip_window = None
+        if tw:
+            tw.destroy()
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -184,7 +229,13 @@ class App:
 
     def get_config_path(self):
         """Get path for the settings file."""
-        return Path(os.path.dirname(os.path.abspath(__file__))) / "gui_settings.json"
+        if getattr(sys, 'frozen', False):
+            # If running as a bundled executable (EXE or AppImage)
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # If running as a normal python script
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        return Path(base_dir) / "gui_settings.json"
 
     def load_settings(self):
         """Load settings from JSON file."""
