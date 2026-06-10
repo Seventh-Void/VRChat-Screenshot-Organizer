@@ -1,6 +1,12 @@
 # VRChat Organizer Windows Build Script
 Write-Host "Checking for build dependencies..." -ForegroundColor Cyan
 
+# Ensure we are in the correct directory
+if (!(Test-Path "gui_vrchat_organizer.py")) {
+    Write-Host "Error: gui_vrchat_organizer.py not found. Please run this script from the project root directory (e.g., .\docs\build_windows.ps1)" -ForegroundColor Red
+    exit
+}
+
 # Ensure PyInstaller and Pillow are installed
 pip install pyinstaller Pillow
 
@@ -10,7 +16,7 @@ Write-Host "Building VRChatOrganizer.exe..." -ForegroundColor Cyan
 # --noconsole: Hide the command prompt window when running the GUI
 # --name: Set the output filename
 # --clean: Clean PyInstaller cache and remove temporary files before building
-pyinstaller --onefile --noconsole --clean --name "VRChatOrganizer" "gui_vrchat_organizer.py"
+python -m PyInstaller --onefile --noconsole --clean --name "VRChatOrganizer" "gui_vrchat_organizer.py"
 
 # Cleanup build artifacts (keeping only the .exe in dist)
 Write-Host "Cleaning up build artifacts..." -ForegroundColor Gray
