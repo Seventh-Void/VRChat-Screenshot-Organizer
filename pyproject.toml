@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vrchat-organizer"
+version = "1.0.0"
+description = "Automatically organize VRChat screenshots by world"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {text = "MIT"}
+authors = [
+    {name = "VRChat Organizer Contributors"}
+]
+keywords = [
+    "vrchat",
+    "screenshots",
+    "organizer",
+    "metadata",
+    "exif",
+    "automation"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: System :: Archiving :: Mirroring",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "Pillow>=9.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/VRChat-Organizer"
+Documentation = "https://github.com/yourusername/VRChat-Organizer#readme"
+Repository = "https://github.com/yourusername/VRChat-Organizer.git"
+Issues = "https://github.com/yourusername/VRChat-Organizer/issues"
+
+[project.scripts]
+vrchat-organizer = "organize_vrchat:main"
+vrchat-preview = "preview_vrchat:main"
+vrchat-debug = "debug_metadata:main"
+
+[tool.setuptools]
+packages = [""]
+
+[tool.black]
+line-length = 100
+target-version = ['py37', 'py38', 'py39', 'py310', 'py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100

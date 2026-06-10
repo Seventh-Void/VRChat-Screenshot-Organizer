@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=VRChat Organizer
+Exec=gui_vrchat_organizer.py %F
+Icon=vrchat-organizer
+Terminal=false
+Categories=Utility;
+Comment=Graphical interface to organize VRChat screenshots by world
