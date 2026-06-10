@@ -56,6 +56,7 @@ class App:
         self.style.configure('TLabelframe', background='#f0f0f0')
         self.style.configure('TLabelframe.Label', background='#f0f0f0')
 
+        self.log_clear_timer_id = None # For auto-clearing logs
         self.dark_mode = tk.BooleanVar(value=False)
 
         self.log_queue = queue.Queue()
@@ -113,6 +114,7 @@ class App:
         self.preview_btn = ttk.Button(btn_frame, text='🔍 Preview (Dry-Run)', command=self.preview)
         self.preview_btn.pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_frame, text='⚙️ Install Autostart', command=self.install_autostart).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text='🗑️ Clear Log', command=self.clear_log).pack(side=tk.LEFT, padx=(0, 5))
 
         # Stats
         stats_frame = ttk.Frame(root)
@@ -146,6 +148,7 @@ class App:
         # Initial button states
         self._set_ui_state("idle")
         
+        self._schedule_log_clear() # Start the initial log clear timer
         # Start polling the log queue
         self.poll_log_queue()
 
@@ -158,10 +161,32 @@ class App:
                 self.log.insert(tk.END, msg + '\n')
                 self.log.config(state=tk.DISABLED)
                 self.log.see(tk.END)
+                self._schedule_log_clear() # Reset timer on new log entry
         except queue.Empty:
             pass
         finally:
             self.root.after(100, self.poll_log_queue)
+            
+    def _schedule_log_clear(self):
+        """Schedules the log to be cleared after inactivity."""
+        if self.log_clear_timer_id:
+            self.root.after_cancel(self.log_clear_timer_id)
+        # Schedule to clear after 30 seconds (30000 ms)
+        self.log_clear_timer_id = self.root.after(30000, self._clear_log_if_inactive)
+
+    def _clear_log_if_inactive(self):
+        """Clears the log if no new activity has occurred."""
+        # Only clear if the log is not empty
+        if self.log.compare("end-1c", "!=", "1.0"): # Check if there's any text
+            self.clear_log()
+            logger.info("Log cleared due to inactivity.")
+        self.log_clear_timer_id = None # Reset timer ID after clearing
+
+    def clear_log(self):
+        """Clears the content of the log area."""
+        self.log.config(state=tk.NORMAL)
+        self.log.delete(1.0, tk.END)
+        self.log.config(state=tk.DISABLED)
 
     def _set_ui_state(self, state: str):
         """Update UI elements based on current application state: idle, busy, watching."""

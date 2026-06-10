@@ -67,6 +67,9 @@ If it shows version 3.7 or higher, you're good. If not, install Python 3.
 ### Q: Can I run this on Windows?
 **A:** Yes! Python 3 works on Windows. The GUI (`gui_vrchat_organizer.py`) works best on Windows.
 
+### Q: Should I use the .bat file or the .exe on Windows?
+**A:** Use the **.exe** if you want a standalone app that doesn't require Python. Use the **.bat** file if you are a developer or already have Python installed and want to run the code directly.
+
 ### Q: Does this work on macOS?
 **A:** Yes! Both CLI and GUI work on macOS.
 

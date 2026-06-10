@@ -18,6 +18,7 @@ VRChat-Organizer/
 ├── 📁 docs/                        # Documentation
 │   ├── INSTALLATION.md             # Installation guide
 │   ├── ADVANCED.md                 # Advanced usage guide
+│   ├── build_windows.ps1           # Windows EXE builder
 │   └── FAQ.md                      # Frequently asked questions
 │
 ├── 📁 src/                         # Source code (to be used)

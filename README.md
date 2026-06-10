@@ -99,9 +99,10 @@ python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 30
 ### Option 2: Graphical Interface
 
 #### Windows
-1. Download and extract the **Source Code (zip)** for this release.
-2. Double-click `VRChatOrganizer.bat` inside the folder.
-3. *Note: Requires Python 3 installed.*
+1. Download the `VRChatOrganizer.exe` from the releases page.
+2. Double-click the executable.
+3. *Alternatively, if you have Python installed, you can run `python3 gui_vrchat_organizer.py`.*
+
 
 #### Linux
 ```bash

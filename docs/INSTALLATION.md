@@ -33,6 +33,19 @@ Without VRCX, your screenshots won't have world metadata embedded, and this orga
    ./VRChatOrganizer.AppImage
    ```
 
+### Method 2: Standalone Executable (Windows)
+
+1. Download the latest `VRChatOrganizer.exe`.
+2. Double-click the executable to run the GUI.
+   *Note: This method does not require Python to be installed on your system.*
+
+   **To build the .exe yourself:**
+   1. Open PowerShell in the project folder.
+   2. Run the build script:
+   ```powershell
+   .\docs\build_windows.ps1
+   ```
+
 ### Method 2: Clone Repository
 
 ```bash
