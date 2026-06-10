@@ -66,6 +66,13 @@ python3 organize_vrchat.py [PATH] [OPTIONS]
   - Smaller values = more frequent checks (more CPU usage)
   - Larger values = less frequent checks (files might wait longer)
 
+#### `--scan-all-months`
+- **Description**: Scan all YYYY-MM folders instead of just the latest one
+- **Usage**: `python3 organize_vrchat.py /path --scan-all-months`
+- **When to use**:
+  - First-time setup to organize your entire history
+  - After disabling/enabling metadata to catch missed files
+
 #### `--single-folder`
 - **Description**: Treat path as a single folder to organize
 - **Usage**: `python3 organize_vrchat.py /path/to/folder --single-folder`

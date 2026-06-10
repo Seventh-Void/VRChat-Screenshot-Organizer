@@ -377,6 +377,11 @@ def main():
         help='Treat path as a single folder to organize (not as a root with YYYY-MM folders)'
     )
     parser.add_argument(
+        '--scan-all-months',
+        action='store_true',
+        help='Scan all month folders instead of just the latest one'
+    )
+    parser.add_argument(
         '--software-filter',
         type=str,
         default=None,
@@ -403,6 +408,7 @@ def main():
     organizer.run(
         single_folder=Path(base_path) if args.single_folder else None,
         software_filter=args.software_filter,
+        scan_all_months=args.scan_all_months,
         dry_run=args.dry_run,
         watch=args.watch,
         interval=args.interval,

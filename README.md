@@ -13,6 +13,9 @@
 - 📊 **Detailed Logging** - Track exactly what's happening with comprehensive logs
 - 🛡️ **Safe Operations** - Automatically handles duplicate filenames and edge cases
 - 🎨 **Print Handling** - Automatically separates 2048x1440 prints into a dedicated "Prints" folder
+- 📅 **Bulk Scanning** - Option to scan all historical month folders at once
+- 🌙 **Dark Mode** - Native dark theme support in the GUI for night owls
+- ⚙️ **Autostart Setup** - Easily install startup entries for Windows and Linux (systemd)
 - 🖥️ **GUI & CLI** - Use either a graphical interface or command-line tools
 - 📦 **Standalone AppImage** - Deploy as a single executable file on Linux
 - 👀 **Watch Mode** - Automatically organize new screenshots as they're created
@@ -73,6 +76,15 @@ This project has been developed with assistance from an AI coding tool. While th
 
 ### Option 1: Command Line
 
+#### Windows
+1. Install [Python 3](https://www.python.org/downloads/) (Check "Add Python to PATH")
+2. Open Command Prompt and run:
+   ```cmd
+   pip install Pillow
+   python organize_vrchat.py "C:\Users\YourName\Pictures\VRChat\VRChat"
+   ```
+
+#### Linux
 ```bash
 # Preview what will be organized (no changes made)
 python3 preview_vrchat.py ~/Pictures/VRChat/VRChat
@@ -86,6 +98,13 @@ python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 30
 
 ### Option 2: Graphical Interface
 
+#### Windows
+Double-click `VRChatOrganizer.bat` or run:
+```cmd
+python gui_vrchat_organizer.py
+```
+
+#### Linux
 ```bash
 python3 gui_vrchat_organizer.py
 ```
@@ -131,6 +150,9 @@ python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --dry-run
 
 # Organize a specific folder
 python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --single-folder
+
+# Scan all historical month folders
+python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --scan-all-months
 
 # Watch mode with custom interval
 python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 60

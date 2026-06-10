@@ -12,6 +12,14 @@ from tkinter import filedialog, scrolledtext, messagebox, font, ttk # Add ttk
 
 from organize_vrchat import VRChatOrganizer
 
+# Enable High DPI scaling on Windows
+if sys.platform.startswith('win'):
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
 # Configure logging for GUI
 logger = logging.getLogger('vrchat_gui')
 logger.setLevel(logging.INFO)
