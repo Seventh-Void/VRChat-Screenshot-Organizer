@@ -7,7 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, scrolledtext, messagebox
+from tkinter import filedialog, scrolledtext, messagebox, font
 
 from organize_vrchat import VRChatOrganizer
 
@@ -35,6 +35,13 @@ class App:
         self.root = root
         root.title('VRChat Organizer')
 
+        # visual tweaks
+        default_font = font.nametofont('TkDefaultFont')
+        default_font.configure(size=10)
+        root.option_add('*Font', default_font)
+
+        self.dark_mode = tk.BooleanVar(value=False)
+
         self.organizer = None
         self.thread = None
 
@@ -47,6 +54,7 @@ class App:
         self.path_entry = tk.Entry(frame, textvariable=self.path_var, width=50)
         self.path_entry.grid(row=0, column=1, padx=4)
         tk.Button(frame, text='Browse', command=self.browse).grid(row=0, column=2)
+        tk.Button(frame, text='Auto-detect', command=self.autodetect_path).grid(row=0, column=3, padx=6)
 
         tk.Label(frame, text='Interval (s):').grid(row=1, column=0, sticky='w')
         self.interval_var = tk.IntVar(value=30)
@@ -58,6 +66,7 @@ class App:
         self.software_var = tk.StringVar()
         tk.Label(frame, text='Software filter:').grid(row=3, column=0, sticky='w')
         tk.Entry(frame, textvariable=self.software_var, width=30).grid(row=3, column=1, sticky='w')
+        tk.Checkbutton(frame, text='Dark mode', variable=self.dark_mode, command=self.apply_theme).grid(row=3, column=3, sticky='w')
 
         # Buttons
         btn_frame = tk.Frame(root)
@@ -79,6 +88,9 @@ class App:
         self.log = scrolledtext.ScrolledText(root, height=16)
         self.log.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
 
+        # Apply initial theme
+        self.apply_theme()
+
         # attach logging handler
         handler = TextHandler(self.log)
         handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
@@ -93,6 +105,60 @@ class App:
         p = filedialog.askdirectory(initialdir=current)
         if p:
             self.path_var.set(p)
+
+    def autodetect_path(self):
+        """Try to find the VRChat pictures folder automatically."""
+        # Common default
+        candidates = []
+        home = Path.home()
+        candidates.append(home / 'Pictures' / 'VRChat' / 'VRChat')
+        candidates.append(home / 'Pictures' / 'VRChat')
+        candidates.append(home / 'Pictures')
+
+        # Search for directories named 'VRChat' under Pictures (one level deep)
+        pictures = home / 'Pictures'
+        try:
+            if pictures.exists():
+                for p in pictures.iterdir():
+                    if p.is_dir() and 'vrchat' in p.name.lower():
+                        candidates.append(p)
+                        for sub in p.iterdir():
+                            if sub.is_dir() and 'vrchat' in sub.name.lower():
+                                candidates.append(sub)
+        except Exception:
+            pass
+
+        # Also look for YYYY-MM folders which indicate VRChat structure
+        def looks_like_vrchat_folder(p: Path):
+            if not p.exists() or not p.is_dir():
+                return False
+            for sub in p.iterdir():
+                if sub.is_dir() and len(sub.name) == 7 and sub.name[4] == '-':
+                    return True
+            return False
+
+        chosen = None
+        for cand in candidates:
+            try:
+                if looks_like_vrchat_folder(cand):
+                    chosen = cand
+                    break
+            except Exception:
+                continue
+
+        if not chosen:
+            # fallback: first existing candidate
+            for cand in candidates:
+                if cand.exists():
+                    chosen = cand
+                    break
+
+        if chosen:
+            self.path_var.set(str(chosen))
+            messagebox.showinfo('Auto-detect', f'Auto-detected path: {chosen}')
+            logger.info('Auto-detected VRChat path: %s', chosen)
+        else:
+            messagebox.showwarning('Auto-detect', 'Could not auto-detect VRChat pictures folder')
 
     def ensure_organizer(self):
         base = self.path_var.get() or str(Path.home() / 'Pictures' / 'VRChat' / 'VRChat')
@@ -140,6 +206,30 @@ class App:
     def run_once(self):
         org = self.ensure_organizer()
         single = self.single_var.get()
+        software = self.software_var.get() or None
+        args = {
+            'single_folder': Path(self.path_var.get()) if single else None,
+            'software_filter': software,
+            'dry_run': False,
+            'watch': False,
+        }
+        threading.Thread(target=lambda: org.run(**args), daemon=True).start()
+        logger.info('Started single-run thread')
+
+    def preview(self):
+        org = self.ensure_organizer()
+        single = self.single_var.get()
+        software = self.software_var.get() or None
+        args = {
+            'single_folder': Path(self.path_var.get()) if single else None,
+            'software_filter': software,
+            'dry_run': True,
+            'watch': False,
+        }
+        threading.Thread(target=lambda: org.run(**args), daemon=True).start()
+        logger.info('Started preview (dry-run) thread')
+
+    def install_autostart(self):
         initial = os.path.join(os.getcwd(), 'VRChatOrganizer.AppImage')
         exe_path = filedialog.askopenfilename(
             title='Select executable to run on login (AppImage or Python script)',
@@ -147,7 +237,8 @@ class App:
             initialfile=os.path.basename(initial),
             filetypes=[('All files', '*')]
         )
-        threading.Thread(target=target, daemon=True).start()
+        if not exe_path:
+            return
 
         # Windows: create a startup batch in the user's Startup folder
         if sys.platform.startswith('win') or os.name == 'nt':
@@ -207,35 +298,57 @@ WantedBy=default.target
             logger.exception('systemctl error while installing autostart: %s', e)
         except Exception as e:
             messagebox.showerror('Error', f'Failed to write service file: {e}')
-[Service]
-Type=simple
-ExecStart={exe_path} --watch
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-'''
-
-        user_systemd_dir = Path.home() / '.config' / 'systemd' / 'user'
-        try:
-            user_systemd_dir.mkdir(parents=True, exist_ok=True)
-            unit_path = user_systemd_dir / service_name
-            with open(unit_path, 'w') as f:
-                f.write(unit)
-
-            # Reload user systemd, enable and start
-            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-            subprocess.run(['systemctl', '--user', 'enable', '--now', service_name], check=True)
-
-            messagebox.showinfo('Autostart Installed', f'Enabled {service_name} for your user.')
-            logger.info('Installed systemd user service: %s', unit_path)
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror('Failed to enable service', f'systemctl error: {e}')
-            logger.exception('systemctl error while installing autostart: %s', e)
-        except Exception as e:
-            messagebox.showerror('Error', f'Failed to write service file: {e}')
             logger.exception('Failed to write systemd user service: %s', e)
+
+    def update_stats(self):
+        stats = {
+            'processed': 0,
+            'organized': 0,
+            'no_metadata': 0,
+            'errors': 0,
+        }
+        if self.organizer and hasattr(self.organizer, 'stats'):
+            try:
+                stats.update(self.organizer.stats)
+            except Exception:
+                pass
+
+        self.stats_label.config(
+            text=f"Processed: {stats['processed']} | Organized: {stats['organized']} | No metadata: {stats['no_metadata']} | Errors: {stats['errors']}"
+        )
+        # Schedule next update
+        try:
+            self.root.after(1000, self.update_stats)
+        except Exception:
+            pass
+
+    def apply_theme(self):
+        dark = bool(self.dark_mode.get())
+        if dark:
+            bg = '#2e2e2e'
+            fg = '#eaeaea'
+            entry_bg = '#3a3a3a'
+            txt_bg = '#202020'
+        else:
+            bg = '#f0f0f0'
+            fg = '#000000'
+            entry_bg = '#ffffff'
+            txt_bg = '#ffffff'
+
+        try:
+            self.root.configure(bg=bg)
+            for widget in self.root.winfo_children():
+                try:
+                    widget.configure(bg=bg)
+                except Exception:
+                    pass
+
+            # Specific widgets
+            self.log.configure(bg=txt_bg, fg=fg, insertbackground=fg)
+            self.path_entry.configure(bg=entry_bg, fg=fg)
+            self.stats_label.configure(bg=bg, fg=fg)
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     root = tk.Tk()

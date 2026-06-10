@@ -273,6 +273,9 @@ class VRChatOrganizer:
         
         # Find all image files in this folder
         for image_file in month_folder.iterdir():
+            if self.watch_mode and self._stop_event.is_set():
+                logger.info('Stop requested; exiting current month folder early')
+                return
             if not image_file.is_file():
                 continue
             
@@ -371,6 +374,9 @@ class VRChatOrganizer:
         
         # Find all image files in this folder
         for image_file in folder.iterdir():
+            if self.watch_mode and self._stop_event.is_set():
+                logger.info('Stop requested; exiting current folder early')
+                return
             if not image_file.is_file():
                 continue
             
@@ -498,6 +504,9 @@ class VRChatOrganizer:
                 logger.info(f"Found {len(month_folders)} month folders to process")
                 
                 for month_folder in month_folders:
+                    if self._stop_event.is_set():
+                        logger.info('Stop requested; halting remaining month folders')
+                        break
                     self.organize_month_folder(month_folder, dry_run=dry_run)
             
             # Print summary
