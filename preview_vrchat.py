@@ -102,6 +102,14 @@ def extract_vrcx_metadata(image_path):
         print(f"Error reading {image_path}: {e}", file=sys.stderr)
         return None
 
+def get_image_info(image_path):
+    """Get dimensions and metadata from image."""
+    try:
+        with Image.open(image_path) as image:
+            return image.size, extract_vrcx_metadata(image_path)
+    except Exception:
+        return None, None
+
 def get_world_name(image_path):
     """Extract world name from image metadata."""
     metadata = extract_vrcx_metadata(image_path)
@@ -155,10 +163,22 @@ def preview(base_path):
                 continue
             
             total_processed += 1
-            world_name = get_world_name(image_file)
+            dimensions, metadata = get_image_info(image_file)
             
-            if world_name:
-                worlds[world_name].append(image_file.name)
+            target = None
+            # Check for prints first, matching organizer logic
+            if dimensions == (2048, 1440):
+                target = "Prints"
+            elif metadata and 'world' in metadata:
+                world_name = metadata['world'].get('name')
+                if world_name:
+                    invalid_chars = '<>:"|?*'
+                    for char in invalid_chars:
+                        world_name = world_name.replace(char, '_')
+                    target = world_name
+            
+            if target:
+                worlds[target].append(image_file.name)
                 total_organized += 1
             else:
                 no_metadata.append(image_file.name)

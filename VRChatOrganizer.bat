@@ -9,6 +9,14 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
+:: Check for script files
+if not exist "gui_vrchat_organizer.py" (
+    echo Error: Missing 'gui_vrchat_organizer.py'. 
+    echo Please make sure this .bat file is in the same folder as the source code.
+    pause
+    exit /b
+)
+
 :: Check for Pillow
 python -c "import PIL" >nul 2>&1
 if %errorlevel% neq 0 (
