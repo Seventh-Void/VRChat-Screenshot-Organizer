@@ -36,7 +36,9 @@ This tool reads world metadata that **VRCX embeds into your screenshots**. Witho
 
 If you see "No world metadata found" messages, verify VRCX is running and Screenshot Metadata is enabled.
 
-## ⚠️ DISCLAIMER - READ THIS BEFORE RUNNING
+## 🤖 AI NOTICE & DISCLAIMER
+
+This project has been developed with assistance from an AI coding tool. While the AI helped generate code and documentation, it may still have bugs, edge cases, or inaccuracies.
 
 **RUN AT YOUR OWN RISK!** This tool modifies your file system by moving files.
 
