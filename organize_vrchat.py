@@ -47,18 +47,14 @@ def install_dependencies():
                 sys.exit(1)
         print("✓ All dependencies installed!\n")
 
-# Install dependencies before importing
-install_dependencies()
+try:
+    from PIL import Image
+    from PIL.ExifTags import TAGS
+except ImportError:
+    install_dependencies()
+    from PIL import Image
+    from PIL.ExifTags import TAGS
 
-# Now import the packages
-from PIL import Image
-from PIL.ExifTags import TAGS
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 class VRChatOrganizer:
@@ -68,6 +64,8 @@ class VRChatOrganizer:
         self.image_extensions = {'.png', '.jpg', '.jpeg'}
         self.watch_mode = False
         self._seen_files = set()
+        self._retry_counts = {} # Track attempts per file in watch mode
+        self._last_month_folder = None
         self._stop_event = threading.Event()
         self.stats = {
             'processed': 0,
@@ -75,427 +73,210 @@ class VRChatOrganizer:
             'no_metadata': 0,
             'errors': 0
         }
-    
-    def extract_vrcx_metadata(self, image_path: Path) -> Optional[Dict]:
-        """
-        Extract VRCX metadata from image (PNG info or JPEG EXIF).
-        
-        Args:
-            image_path: Path to the image file
-            
-        Returns:
-            Dictionary containing VRCX data, or None if not found
-        """
-        try:
-            image = Image.open(image_path)
-            
-            # Check image.info dictionary (PNG chunks, etc.)
-            if hasattr(image, 'info') and image.info:
-                # Look for Description or Comment fields
-                for key in ['Description', 'Comment', 'comment', 'description']:
-                    if key in image.info:
-                        value = image.info[key]
-                        if isinstance(value, (str, bytes)):
-                            try:
-                                # Convert bytes to string if needed
-                                if isinstance(value, bytes):
-                                    value_str = value.decode('utf-8', errors='ignore')
-                                else:
-                                    value_str = str(value)
-                                
-                                # Try to parse as JSON
-                                if value_str.startswith('{'):
-                                    data = json.loads(value_str)
-                                    if 'world' in data and 'name' in data.get('world', {}):
-                                        logger.debug(f"Found metadata in {key}")
-                                        return data
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                continue
-            
-            # Check EXIF data for JPEG files
-            exif_data = image.getexif()
-            
-            if exif_data:
-                # Check tag 270 directly (ImageDescription - most common for VRCX data)
-                if 270 in exif_data:
-                    value = exif_data[270]
-                    if isinstance(value, (str, bytes)):
-                        try:
-                            if isinstance(value, bytes):
-                                value_str = value.decode('utf-8', errors='ignore')
-                            else:
-                                value_str = str(value)
-                            
-                            if value_str.startswith('{'):
-                                data = json.loads(value_str)
-                                if 'world' in data and 'name' in data.get('world', {}):
-                                    logger.debug(f"Found metadata in EXIF tag 270")
-                                    return data
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            pass
-                
-                # Also check IFD sections for completeness
-                if hasattr(exif_data, 'get_ifd'):
-                    try:
-                        ifd = exif_data.get_ifd(0)
-                        if 270 in ifd:
-                            value = ifd[270]
-                            if isinstance(value, (str, bytes)):
-                                try:
-                                    if isinstance(value, bytes):
-                                        value_str = value.decode('utf-8', errors='ignore')
-                                    else:
-                                        value_str = str(value)
-                                    
-                                    if value_str.startswith('{'):
-                                        data = json.loads(value_str)
-                                        if 'world' in data and 'name' in data.get('world', {}):
-                                            logger.debug(f"Found metadata in EXIF 0th IFD tag 270")
-                                            return data
-                                except (json.JSONDecodeError, UnicodeDecodeError):
-                                    pass
-                    except Exception:
-                        pass
-            
+
+    def _parse_json_metadata(self, value) -> Optional[Dict]:
+        """Helper to parse JSON from metadata values (str or bytes)."""
+        if not isinstance(value, (str, bytes)):
             return None
-            
+        try:
+            value_str = value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else str(value)
+            if value_str.startswith('{'):
+                return json.loads(value_str)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        return None
+
+    def _sanitize_name(self, name: str) -> str:
+        """Sanitize world name for use as folder name."""
+        invalid_chars = '<>:"|?*/\\'
+        for char in invalid_chars:
+            name = name.replace(char, '_')
+        while '__' in name:
+            name = name.replace('__', '_')
+        return name.strip('. ')
+
+    def _get_image_data(self, image_path: Path) -> Dict:
+        """Extract all relevant metadata in a single pass."""
+        data = {'dimensions': None, 'world_name': None, 'software': None}
+        try:
+            with Image.open(image_path) as image:
+                data['dimensions'] = image.size
+                if hasattr(image, 'info') and image.info:
+                    for key in ['Software', 'software', 'CreatorTool', 'creator_tool']:
+                        if key in image.info:
+                            val = image.info[key]
+                            data['software'] = val.decode('utf-8', errors='ignore') if isinstance(val, bytes) else str(val)
+                            break
+                    for key in ['Description', 'Comment', 'comment', 'description']:
+                        vrcx_data = self._parse_json_metadata(image.info.get(key))
+                        if vrcx_data and 'world' in vrcx_data:
+                            data['world_name'] = self._sanitize_name(vrcx_data['world'].get('name', ''))
+                            break
+                
+                exif_data = image.getexif()
+                if exif_data:
+                    if not data['software'] and 305 in exif_data:
+                        val = exif_data[305]
+                        data['software'] = val.decode('utf-8', errors='ignore') if isinstance(val, bytes) else str(val)
+                    if not data['world_name']:
+                        vrcx_data = self._parse_json_metadata(exif_data.get(270))
+                        if not vrcx_data and hasattr(exif_data, 'get_ifd'):
+                            try:
+                                ifd = exif_data.get_ifd(0)
+                                vrcx_data = self._parse_json_metadata(ifd.get(270))
+                            except Exception: pass
+                        if vrcx_data and 'world' in vrcx_data:
+                            data['world_name'] = self._sanitize_name(vrcx_data['world'].get('name', ''))
+        except (IOError, PermissionError):
+            pass # File likely locked by another process
         except Exception as e:
             logger.error(f"Error reading metadata from {image_path}: {e}")
             self.stats['errors'] += 1
-            return None
-    
-    def get_software_metadata(self, image_path: Path) -> Optional[str]:
-        """
-        Extract software metadata from image.
-        
-        Args:
-            image_path: Path to the image file
-            
-        Returns:
-            Software string, or None if not found
-        """
+        return data
+
+    def extract_vrcx_metadata(self, image_path: Path) -> Optional[Dict]:
+        """Legacy method maintained for compatibility."""
         try:
-            image = Image.open(image_path)
-            
-            # Check image.info for software info
-            if hasattr(image, 'info') and image.info:
-                for key in ['Software', 'software', 'CreatorTool', 'creator_tool']:
-                    if key in image.info:
-                        value = image.info[key]
-                        if isinstance(value, (str, bytes)):
-                            if isinstance(value, bytes):
-                                return value.decode('utf-8', errors='ignore')
-                            return str(value)
-            
-            # Check EXIF for software tag (305) directly first
-            exif_data = image.getexif()
-            if exif_data:
-                if 305 in exif_data:  # Software tag
-                    value = exif_data[305]
-                    if isinstance(value, bytes):
-                        return value.decode('utf-8', errors='ignore')
-                    return str(value)
-                
-                # Also check IFD sections
-                if hasattr(exif_data, 'get_ifd'):
-                    try:
-                        ifd = exif_data.get_ifd(0)
-                        if 305 in ifd:
-                            value = ifd[305]
-                            if isinstance(value, bytes):
-                                return value.decode('utf-8', errors='ignore')
-                            return str(value)
-                    except Exception:
-                        pass
-            
+            with Image.open(image_path) as image:
+                if hasattr(image, 'info') and image.info:
+                    for key in ['Description', 'Comment', 'comment', 'description']:
+                        vrcx_data = self._parse_json_metadata(image.info.get(key))
+                        if vrcx_data and 'world' in vrcx_data: return vrcx_data
+                exif_data = image.getexif()
+                if exif_data:
+                    vrcx_data = self._parse_json_metadata(exif_data.get(270))
+                    if vrcx_data and 'world' in vrcx_data: return vrcx_data
+                    if hasattr(exif_data, 'get_ifd'):
+                        try:
+                            ifd = exif_data.get_ifd(0)
+                            vrcx_data = self._parse_json_metadata(ifd.get(270))
+                            if vrcx_data and 'world' in vrcx_data: return vrcx_data
+                        except Exception: pass
             return None
-        except Exception:
-            return None
-    
+        except Exception: return None
+
     def get_world_name(self, image_path: Path) -> Optional[str]:
-        """
-        Extract world name from image metadata.
-        
-        Args:
-            image_path: Path to the image file
-            
-        Returns:
-            World name string, or None if not found
-        """
-        metadata = self.extract_vrcx_metadata(image_path)
-        if metadata and 'world' in metadata:
-            world_name = metadata['world'].get('name')
-            if world_name:
-                # Sanitize world name for use as folder name
-                # Remove invalid filesystem characters
-                invalid_chars = '<>:"|?*/'
-                for char in invalid_chars:
-                    world_name = world_name.replace(char, '_')
-                # Clean up multiple underscores
-                while '__' in world_name:
-                    world_name = world_name.replace('__', '_')
-                return world_name
-        return None
-    
+        """Legacy method maintained for compatibility."""
+        return self._get_image_data(image_path).get('world_name')
+
     def get_image_dimensions(self, image_path: Path) -> Optional[tuple]:
-        """
-        Get image dimensions.
-        
-        Args:
-            image_path: Path to the image file
-            
-        Returns:
-            Tuple of (width, height) or None if error
-        """
+        """Legacy method maintained for compatibility."""
+        return self._get_image_data(image_path).get('dimensions')
+
+    def _process_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
+        """Unified logic to process images in a folder."""
         try:
-            image = Image.open(image_path)
-            return image.size
+            image_files = [
+                f for f in folder.iterdir()
+                if f.is_file() and f.suffix.lower() in self.image_extensions
+            ]
         except Exception as e:
-            logger.error(f"Error getting dimensions for {image_path}: {e}")
-            return None
-    
-    def organize_month_folder(self, month_folder: Path, dry_run: bool = False) -> bool:
-        """
-        Organize all images in a month folder by world or into Prints folder.
-        2048x1440 images go to Prints folder, others organized by world.
-        
-        Args:
-            month_folder: Path to the month folder (e.g., 2025-03)
-            dry_run: If True, log actions without moving files
-        """
-        if self.watch_mode and not hasattr(self, '_seen_files'):
-            self._seen_files = set()
-
-        # Find all candidate image files in this folder
-        image_files = [
-            f for f in month_folder.iterdir()
-            if f.is_file() and f.suffix.lower() in self.image_extensions
-        ]
+            if not self.watch_mode: logger.error(f"Error accessing folder {folder}: {e}")
+            return False
 
         if self.watch_mode:
-            image_files = [
-                f for f in image_files
-                if f.resolve() not in self._seen_files
-            ]
-            if not image_files:
-                return False
-
-        logger.info(f"Processing {month_folder.name}...")
-        
-        # Create Prints folder if it will be needed
-        prints_folder = month_folder / "Prints"
-        
-        for image_file in image_files:
-            if self.watch_mode and self._stop_event.is_set():
-                logger.info('Stop requested; exiting current month folder early')
-                return True
-            
-            resolved_path = image_file.resolve()
-            if self.watch_mode:
-                self._seen_files.add(resolved_path)
-            
-            self.stats['processed'] += 1
-            
-            # Check if image is 2048x1440 (Prints)
-            dimensions = self.get_image_dimensions(image_file)
-            if dimensions == (2048, 1440):
-                # Move to Prints folder
-                prints_folder.mkdir(exist_ok=True)
-                dest_path = prints_folder / image_file.name
-                
-                # Handle duplicate names
-                counter = 1
-                base_stem = image_file.stem
-                while dest_path.exists():
-                    new_name = f"{base_stem}_{counter}{image_file.suffix}"
-                    dest_path = prints_folder / new_name
-                    counter += 1
-                
-                try:
-                    if dry_run:
-                        logger.info(f"Dry run: would move {image_file.name} -> Prints/")
-                    else:
-                        shutil.move(str(image_file), str(dest_path))
-                        logger.info(f"Moved {image_file.name} -> Prints/")
-                    self.stats['organized'] += 1
-                except Exception as e:
-                    logger.error(f"Failed to move {image_file.name} to Prints: {e}")
-                    self.stats['errors'] += 1
-                continue
-            
-            # Extract world name for non-Print images
-            world_name = self.get_world_name(image_file)
-            
-            if not world_name:
-                logger.debug(f"No world metadata found for {image_file.name}")
-                self.stats['no_metadata'] += 1
-                continue
-            
-            # Create world subfolder
-            world_folder = month_folder / world_name
-            world_folder.mkdir(exist_ok=True)
-            
-            # Move image to world folder
-            dest_path = world_folder / image_file.name
-            
-            # Handle duplicate names
-            counter = 1
-            base_stem = image_file.stem
-            while dest_path.exists():
-                new_name = f"{base_stem}_{counter}{image_file.suffix}"
-                dest_path = world_folder / new_name
-                counter += 1
-            
-            try:
-                if dry_run:
-                    logger.info(f"Dry run: would move {image_file.name} -> {world_name}/")
-                else:
-                    shutil.move(str(image_file), str(dest_path))
-                    logger.info(f"Moved {image_file.name} -> {world_name}/")
-                self.stats['organized'] += 1
-            except Exception as e:
-                logger.error(f"Failed to move {image_file.name}: {e}")
-                self.stats['errors'] += 1
-        return True
-    
-    def organize_single_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
-        """
-        Organize all images in a single folder by world.
-        Optionally filters by software metadata.
-        
-        Args:
-            folder: Path to the folder to organize
-            software_filter: Optional software string to filter by (e.g., "Adobe Photoshop Lightroom Classic 15.3 (Windows)")
-            dry_run: If True, log actions without moving files
-        """
-        if self.watch_mode and not hasattr(self, '_seen_files'):
-            self._seen_files = set()
-
-        # Find all candidate image files in this folder
-        image_files = [
-            f for f in folder.iterdir()
-            if f.is_file() and f.suffix.lower() in self.image_extensions
-        ]
-
-        if self.watch_mode:
-            image_files = [
-                f for f in image_files
-                if f.resolve() not in self._seen_files
-            ]
-            if not image_files:
-                return False
-
-        logger.info(f"Processing folder: {folder.name}")
-        
-        if software_filter:
-            logger.info(f"Filtering by software: {software_filter}")
-        
-        # Create Prints folder reference
-        prints_folder = folder / "Prints"
-        
-        for image_file in image_files:
-            if self.watch_mode and self._stop_event.is_set():
-                logger.info('Stop requested; exiting current folder early')
-                return True
-            
-            resolved_path = image_file.resolve()
-            if self.watch_mode:
-                self._seen_files.add(resolved_path)
-            
-            self.stats['processed'] += 1
-            
-            # Check software filter if specified
-            if software_filter:
-                software = self.get_software_metadata(image_file)
-                if not software or software_filter not in software:
-                    logger.debug(f"Skipping {image_file.name}: software mismatch (found: {software})")
+            valid_files = []
+            for f in image_files:
+                res = f.resolve()
+                if res in self._seen_files: continue
+                if self._retry_counts.get(res, 0) >= 10:
+                    self._seen_files.add(res)
                     self.stats['no_metadata'] += 1
                     continue
+                valid_files.append(f)
+            image_files = valid_files
+
+        if not image_files: return False
+
+        if not self.watch_mode:
+            logger.info(f"Processing folder: {folder.name}")
+            if software_filter: logger.info(f"Filtering by software: {software_filter}")
+        
+        for image_file in image_files:
+            if self.watch_mode and self._stop_event.is_set():
+                break
             
-            # Check if image is 2048x1440 (Prints)
-            dimensions = self.get_image_dimensions(image_file)
-            if dimensions == (2048, 1440):
-                # Move to Prints folder
-                prints_folder.mkdir(exist_ok=True)
-                dest_path = prints_folder / image_file.name
-                
-                # Handle duplicate names
-                counter = 1
-                base_stem = image_file.stem
-                while dest_path.exists():
-                    new_name = f"{base_stem}_{counter}{image_file.suffix}"
-                    dest_path = prints_folder / new_name
-                    counter += 1
-                
-                try:
-                    if dry_run:
-                        logger.info(f"Dry run: would move {image_file.name} -> Prints/")
-                    else:
-                        shutil.move(str(image_file), str(dest_path))
-                        logger.info(f"Moved {image_file.name} -> Prints/")
-                    self.stats['organized'] += 1
-                except Exception as e:
-                    logger.error(f"Failed to move {image_file.name} to Prints: {e}")
-                    self.stats['errors'] += 1
+            resolved_path = image_file.resolve()
+            img_data = self._get_image_data(image_file)
+            
+            if software_filter:
+                software = img_data['software']
+                if not software or software_filter not in software:
+                    self.stats['no_metadata'] += 1
+                    continue
+
+            target_sub = None
+            if img_data['dimensions'] == (2048, 1440):
+                target_sub = "Prints"
+            elif img_data['world_name']:
+                target_sub = img_data['world_name']
+
+            if not target_sub:
+                if self.watch_mode:
+                    self._retry_counts[resolved_path] = self._retry_counts.get(resolved_path, 0) + 1
+                else:
+                    self.stats['no_metadata'] += 1
                 continue
-            
-            # Extract world name for non-Print images
-            world_name = self.get_world_name(image_file)
-            
-            if not world_name:
-                logger.debug(f"No world metadata found for {image_file.name}")
-                self.stats['no_metadata'] += 1
-                continue
-            
-            # Create world subfolder
-            world_folder = folder / world_name
-            world_folder.mkdir(exist_ok=True)
-            
-            # Move image to world folder
-            dest_path = world_folder / image_file.name
-            
-            # Handle duplicate names
+
+            self.stats['processed'] += 1
+
+            dest_folder = folder / target_sub
+            if not dry_run: dest_folder.mkdir(exist_ok=True)
+
+            dest_path = dest_folder / image_file.name
             counter = 1
             base_stem = image_file.stem
             while dest_path.exists():
                 new_name = f"{base_stem}_{counter}{image_file.suffix}"
-                dest_path = world_folder / new_name
+                dest_path = dest_folder / new_name
                 counter += 1
-            
+
             try:
                 if dry_run:
-                    logger.info(f"Dry run: would move {image_file.name} -> {world_name}/")
+                    logger.info(f"Dry run: would move {image_file.name} -> {target_sub}/")
                 else:
                     shutil.move(str(image_file), str(dest_path))
-                    logger.info(f"Moved {image_file.name} -> {world_name}/")
+                    logger.info(f"Moved {image_file.name} -> {target_sub}/")
                 self.stats['organized'] += 1
+                if self.watch_mode: self._seen_files.add(resolved_path)
             except Exception as e:
                 logger.error(f"Failed to move {image_file.name}: {e}")
                 self.stats['errors'] += 1
+                if self.watch_mode: self._seen_files.add(resolved_path)
         return True
-    
+
+    def organize_month_folder(self, month_folder: Path, dry_run: bool = False) -> bool:
+        """Organize month folder using unified logic."""
+        return self._process_folder(month_folder, dry_run=dry_run)
+
+    def organize_single_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
+        """Organize single folder using unified logic."""
+        return self._process_folder(folder, software_filter, dry_run)
+
     def run(
         self,
         single_folder: Optional[Path] = None,
         software_filter: Optional[str] = None,
         dry_run: bool = False,
+        scan_all_months: bool = False, # New parameter
         watch: bool = False,
-        interval: int = 30,
+        interval: int = 5,
     ) -> None:
         """Run the organization process."""
         self.watch_mode = watch
         if watch:
             self._seen_files = set()
+            self._retry_counts = {}
+            self._last_month_folder = None
             self._stop_event.clear()
-        
+
         def run_once() -> bool:
             # If single_folder is specified, organize just that folder
             if single_folder:
                 if not single_folder.exists():
                     logger.error(f"Path does not exist: {single_folder}")
                     return False
-
-                return self.organize_single_folder(single_folder, software_filter, dry_run=dry_run)
+                return self._process_folder(single_folder, software_filter, dry_run=dry_run)
             else:
                 if not self.base_path.exists():
                     logger.error(f"Path does not exist: {self.base_path}")
@@ -506,47 +287,37 @@ class VRChatOrganizer:
                     d for d in self.base_path.iterdir()
                     if d.is_dir() and len(d.name) == 7 and d.name[4] == '-'
                 ])
-
                 if not month_folders:
                     logger.warning(f"No month folders (YYYY-MM format) found in {self.base_path}")
                     return False
 
                 any_changed = False
-                for month_folder in month_folders:
-                    if self._stop_event.is_set():
-                        logger.info('Stop requested; halting remaining month folders')
-                        break
-                    if self.organize_month_folder(month_folder, dry_run=dry_run):
+                if scan_all_months:
+                    logger.info(f"Starting scan of all {len(month_folders)} month folders...")
+                    for month_folder in month_folders:
+                        if self._stop_event.is_set():
+                            logger.info('Stop requested; halting remaining month folders')
+                            break
+                        if self._process_folder(month_folder, software_filter, dry_run=dry_run):
+                            any_changed = True
+                else:
+                    # Pick the most recent folder (last one in sorted list)
+                    target_folder = month_folders[-1]
+                    if not self.watch_mode or self._last_month_folder != target_folder:
+                        logger.info(f"Automatically targeting most recent month: {target_folder.name}")
+                        self._last_month_folder = target_folder
+                    if self._process_folder(target_folder, software_filter, dry_run=dry_run):
                         any_changed = True
-
                 return any_changed
 
         if watch:
-            logger.info(f"Watch mode enabled, scanning every {interval} seconds")
+            logger.info(f"Watch mode enabled (interval: {interval}s)")
             try:
-                while True:
-                    if self._stop_event.is_set():
-                        logger.info("Stop requested; exiting watch loop")
-                        break
-
-                    stats_before = self.stats.copy()
-                    changed = run_once()
-
-                    if changed:
-                        logger.info("\n" + "="*50)
-                        logger.info("Watch scan summary:")
-                        logger.info(f"New images processed: {self.stats['processed'] - stats_before['processed']}")
-                        logger.info(f"Images organized: {self.stats['organized'] - stats_before['organized']}")
-                        logger.info(f"Images without metadata: {self.stats['no_metadata'] - stats_before['no_metadata']}")
-                        logger.info(f"Errors: {self.stats['errors'] - stats_before['errors']}")
-                        logger.info("="*50)
-                        logger.info(f"Sleeping for {interval} seconds before next scan...")
-
-                    # Sleep in small increments to be responsive to stop requests
-                    slept = 0
-                    while slept < interval and not self._stop_event.is_set():
+                while not self._stop_event.is_set():
+                    run_once()
+                    for _ in range(interval):
+                        if self._stop_event.is_set(): break
                         time.sleep(1)
-                        slept += 1
             except KeyboardInterrupt:
                 logger.info("Watch mode interrupted by user")
         else:
@@ -569,6 +340,11 @@ class VRChatOrganizer:
 def main():
     """Main entry point."""
     import argparse
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     
     parser = argparse.ArgumentParser(
         description='Organize VRChat screenshots by world'
@@ -592,7 +368,7 @@ def main():
     parser.add_argument(
         '--interval',
         type=int,
-        default=30,
+        default=5,
         help='Watch interval in seconds when --watch is enabled'
     )
     parser.add_argument(

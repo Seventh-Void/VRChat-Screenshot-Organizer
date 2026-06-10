@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Simple Tkinter GUI for VRChat Organizer"""
 import threading
+import queue
 import logging
 import sys
 import os
 import subprocess
-from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog, scrolledtext, messagebox, font
+from pathlib import Path # Keep Path for file operations
+import tkinter as tk # Keep tk for root, BooleanVar, StringVar, IntVar, messagebox, scrolledtext
+from tkinter import filedialog, scrolledtext, messagebox, font, ttk # Add ttk
 
 from organize_vrchat import VRChatOrganizer
 
@@ -16,19 +17,16 @@ logger = logging.getLogger('vrchat_gui')
 logger.setLevel(logging.INFO)
 
 class TextHandler(logging.Handler):
-    def __init__(self, text_widget):
-        super().__init__()
-        self.text_widget = text_widget
+    def __init__(self, log_queue):
+        logging.Handler.__init__(self)
+        self.log_queue = log_queue
 
     def emit(self, record):
-        msg = self.format(record)
-        def append():
-            self.text_widget.insert(tk.END, msg + '\n')
-            self.text_widget.yview(tk.END)
         try:
-            self.text_widget.after(0, append)
+            msg = self.format(record)
+            self.log_queue.put(msg)
         except Exception:
-            pass
+            self.handleError(record)
 
 class App:
     def __init__(self, root):
@@ -36,68 +34,147 @@ class App:
         root.title('VRChat Organizer')
 
         # visual tweaks
-        default_font = font.nametofont('TkDefaultFont')
-        default_font.configure(size=10)
-        root.option_add('*Font', default_font)
+        # Use ttk for themed widgets
+        self.style = ttk.Style()
+        self.style.theme_use('clam') # 'clam' is a good base for customization
+
+        # Configure default font for ttk widgets
+        self.style.configure('.', font=('Segoe UI', 10))
+        self.style.configure('TButton', font=('Segoe UI', 10, 'bold'))
+        self.style.configure('TLabel', font=('Segoe UI', 10))
+        self.style.configure('TCheckbutton', font=('Segoe UI', 10))
+        self.style.configure('TEntry', font=('Segoe UI', 10))
+        self.style.configure('TFrame', background='#f0f0f0') # Default light mode background
+        self.style.configure('TLabelframe', background='#f0f0f0')
+        self.style.configure('TLabelframe.Label', background='#f0f0f0')
 
         self.dark_mode = tk.BooleanVar(value=False)
 
+        self.log_queue = queue.Queue()
         self.organizer = None
         self.thread = None
 
-        # Controls frame
-        frame = tk.Frame(root)
-        frame.pack(fill=tk.X, padx=8, pady=6)
+        # Main controls frame
+        controls_frame = ttk.LabelFrame(root, text="Configuration")
+        controls_frame.pack(fill=tk.X, padx=10, pady=8)
 
-        tk.Label(frame, text='Path:').grid(row=0, column=0, sticky='w')
-        self.path_var = tk.StringVar()
-        self.path_entry = tk.Entry(frame, textvariable=self.path_var, width=50)
-        self.path_entry.grid(row=0, column=1, padx=4)
-        tk.Button(frame, text='Browse', command=self.browse).grid(row=0, column=2)
-        tk.Button(frame, text='Auto-detect', command=self.autodetect_path).grid(row=0, column=3, padx=6)
+        # Path selection
+        path_frame = ttk.Frame(controls_frame)
+        path_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(path_frame, text='Base Path:').pack(side=tk.LEFT, padx=(0, 5))
+        self.path_var = tk.StringVar(value=str(Path.home() / 'Pictures' / 'VRChat' / 'VRChat')) # Default path
+        self.path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=60)
+        self.path_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        ttk.Button(path_frame, text='Browse', command=self.browse).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(path_frame, text='Auto-detect', command=self.autodetect_path).pack(side=tk.LEFT)
 
-        tk.Label(frame, text='Interval (s):').grid(row=1, column=0, sticky='w')
-        self.interval_var = tk.IntVar(value=30)
-        tk.Entry(frame, textvariable=self.interval_var, width=8).grid(row=1, column=1, sticky='w')
+        # Options frame
+        options_frame = ttk.Frame(controls_frame)
+        options_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        self.single_var = tk.BooleanVar()
-        tk.Checkbutton(frame, text='Single folder', variable=self.single_var).grid(row=2, column=1, sticky='w')
+        # Interval
+        ttk.Label(options_frame, text='Watch Interval (s):').grid(row=0, column=0, sticky='w', padx=(0, 5))
+        self.interval_var = tk.IntVar(value=5)
+        ttk.Entry(options_frame, textvariable=self.interval_var, width=10).grid(row=0, column=1, sticky='w', padx=(0, 15))
 
+        # Single folder / Scan all months
+        self.single_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text='Organize a Single Folder (not YYYY-MM structure)', variable=self.single_var).grid(row=1, column=0, columnspan=2, sticky='w', pady=(5,0))
+
+        self.scan_all_months_var = tk.BooleanVar(value=False) # New toggle
+        ttk.Checkbutton(options_frame, text='Scan All Month Folders (default is latest month only)', variable=self.scan_all_months_var).grid(row=2, column=0, columnspan=2, sticky='w', pady=(0,5))
+
+        # Software filter
         self.software_var = tk.StringVar()
-        tk.Label(frame, text='Software filter:').grid(row=3, column=0, sticky='w')
-        tk.Entry(frame, textvariable=self.software_var, width=30).grid(row=3, column=1, sticky='w')
-        tk.Checkbutton(frame, text='Dark mode', variable=self.dark_mode, command=self.apply_theme).grid(row=3, column=3, sticky='w')
+        ttk.Label(options_frame, text='Software Filter (optional):').grid(row=3, column=0, sticky='w', padx=(0, 5))
+        ttk.Entry(options_frame, textvariable=self.software_var, width=30).grid(row=3, column=1, sticky='w')
+
+        # Theme toggle
+        ttk.Checkbutton(options_frame, text='Dark Mode', variable=self.dark_mode, command=self.apply_theme).grid(row=0, column=2, sticky='e', padx=(20,0))
 
         # Buttons
-        btn_frame = tk.Frame(root)
-        btn_frame.pack(fill=tk.X, padx=8, pady=6)
-        self.start_btn = tk.Button(btn_frame, text='Start Watch', command=self.start_watch)
-        self.start_btn.pack(side=tk.LEFT)
-        tk.Button(btn_frame, text='Stop', command=self.stop_watch).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text='Run Once', command=self.run_once).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text='Preview (dry-run)', command=self.preview).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text='Install Autostart', command=self.install_autostart).pack(side=tk.LEFT, padx=6)
+        btn_frame = ttk.Frame(root)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.start_btn = ttk.Button(btn_frame, text='▶ Start Watch', command=self.start_watch, style='Accent.TButton')
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.stop_btn = ttk.Button(btn_frame, text='■ Stop', command=self.stop_watch, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.run_btn = ttk.Button(btn_frame, text='⟳ Run Once', command=self.run_once)
+        self.run_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.preview_btn = ttk.Button(btn_frame, text='🔍 Preview (Dry-Run)', command=self.preview)
+        self.preview_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text='⚙️ Install Autostart', command=self.install_autostart).pack(side=tk.LEFT)
 
         # Stats
-        stats_frame = tk.Frame(root)
-        stats_frame.pack(fill=tk.X, padx=8, pady=6)
-        self.stats_label = tk.Label(stats_frame, text='Processed: 0 | Organized: 0 | No metadata: 0 | Errors: 0')
-        self.stats_label.pack(anchor='w')
+        stats_frame = ttk.Frame(root)
+        stats_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.stats_label = ttk.Label(stats_frame, text='Processed: 0 | Organized: 0 | No metadata: 0 | Errors: 0')
+        self.stats_label.pack(side=tk.LEFT, anchor='w')
+
+        self.progress = ttk.Progressbar(stats_frame, mode='indeterminate', length=150)
+        self.progress.pack(side=tk.RIGHT, padx=5)
 
         # Log area
-        self.log = scrolledtext.ScrolledText(root, height=16)
-        self.log.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+        self.log = scrolledtext.ScrolledText(root, height=15, wrap=tk.WORD, state=tk.DISABLED) # Disable editing
+        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
         # Apply initial theme
         self.apply_theme()
 
-        # attach logging handler
-        handler = TextHandler(self.log)
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(handler)
+        # Configure root logger for GUI
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        for h in root_logger.handlers[:]:
+            root_logger.removeHandler(h)
+
+        gui_handler = TextHandler(self.log_queue)
+        gui_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%H:%M:%S'))
+        root_logger.addHandler(gui_handler)
 
         # Periodic UI update for stats
         self.update_stats()
+
+        # Initial button states
+        self._set_ui_state("idle")
+        
+        # Start polling the log queue
+        self.poll_log_queue()
+
+    def poll_log_queue(self):
+        """Check the log queue and update the text widget."""
+        try:
+            while True:
+                msg = self.log_queue.get_nowait()
+                self.log.config(state=tk.NORMAL)
+                self.log.insert(tk.END, msg + '\n')
+                self.log.config(state=tk.DISABLED)
+                self.log.see(tk.END)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(100, self.poll_log_queue)
+
+    def _set_ui_state(self, state: str):
+        """Update UI elements based on current application state: idle, busy, watching."""
+        if state == "watching":
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.NORMAL)
+            self.run_btn.config(state=tk.DISABLED)
+            self.preview_btn.config(state=tk.DISABLED)
+            self.progress.start(10)
+        elif state == "busy":
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.DISABLED)
+            self.run_btn.config(state=tk.DISABLED)
+            self.preview_btn.config(state=tk.DISABLED)
+            self.progress.start(10)
+        else: # idle
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+            self.run_btn.config(state=tk.NORMAL)
+            self.preview_btn.config(state=tk.NORMAL)
+            self.progress.stop()
 
     def browse(self):
         # start directory in sensible default (existing entry or Pictures/VRChat)
@@ -164,12 +241,6 @@ class App:
         base = self.path_var.get() or str(Path.home() / 'Pictures' / 'VRChat' / 'VRChat')
         if not self.organizer or str(self.organizer.base_path) != str(base):
             self.organizer = VRChatOrganizer(base)
-            # attach organizer logger to GUI
-            org_logger = logging.getLogger()
-            org_logger.setLevel(logging.INFO)
-            # prevent adding multiple handlers
-            if not any(isinstance(h, TextHandler) for h in org_logger.handlers):
-                org_logger.addHandler(TextHandler(self.log))
         return self.organizer
 
     def start_watch(self):
@@ -182,6 +253,7 @@ class App:
         software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
+            'scan_all_months': self.scan_all_months_var.get(), # Pass new toggle
             'software_filter': software,
             'dry_run': False,
             'watch': True,
@@ -192,16 +264,16 @@ class App:
                 org.run(**args)
             except Exception as e:
                 logger.exception('Organizer thread error: %s', e)
+        logger.info('Starting background watch process...')
+        self._set_ui_state("watching")
         self.thread = threading.Thread(target=target, daemon=True)
         self.thread.start()
-        logger.info('Started watch thread')
 
     def stop_watch(self):
         if not self.organizer:
-            logger.info('No organizer running')
             return
         self.organizer.stop()
-        logger.info('Stop requested')
+        self._set_ui_state("idle")
 
     def run_once(self):
         org = self.ensure_organizer()
@@ -209,12 +281,21 @@ class App:
         software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
+            'scan_all_months': self.scan_all_months_var.get(),
             'software_filter': software,
             'dry_run': False,
             'watch': False,
         }
-        threading.Thread(target=lambda: org.run(**args), daemon=True).start()
-        logger.info('Started single-run thread')
+        
+        def task():
+            try:
+                org.run(**args)
+            finally:
+                self.root.after(0, lambda: self._set_ui_state("idle"))
+
+        self._set_ui_state("busy")
+        threading.Thread(target=task, daemon=True).start()
+        logger.info('Running one-time organization...')
 
     def preview(self):
         org = self.ensure_organizer()
@@ -222,12 +303,21 @@ class App:
         software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
+            'scan_all_months': self.scan_all_months_var.get(),
             'software_filter': software,
             'dry_run': True,
             'watch': False,
         }
-        threading.Thread(target=lambda: org.run(**args), daemon=True).start()
-        logger.info('Started preview (dry-run) thread')
+
+        def task():
+            try:
+                org.run(**args)
+            finally:
+                self.root.after(0, lambda: self._set_ui_state("idle"))
+
+        self._set_ui_state("busy")
+        threading.Thread(target=task, daemon=True).start()
+        logger.info('Generating dry-run preview...')
 
     def install_autostart(self):
         initial = os.path.join(os.getcwd(), 'VRChatOrganizer.AppImage')
@@ -309,7 +399,7 @@ WantedBy=default.target
         }
         if self.organizer and hasattr(self.organizer, 'stats'):
             try:
-                stats.update(self.organizer.stats)
+                stats.update(self.organizer.stats.copy())
             except Exception:
                 pass
 
@@ -320,33 +410,70 @@ WantedBy=default.target
         try:
             self.root.after(1000, self.update_stats)
         except Exception:
-            pass
+            pass # GUI might be closing
 
     def apply_theme(self):
         dark = bool(self.dark_mode.get())
         if dark:
-            bg = '#2e2e2e'
-            fg = '#eaeaea'
-            entry_bg = '#3a3a3a'
-            txt_bg = '#202020'
+            # Dark theme colors
+            bg_color = '#2e2e2e'
+            fg_color = '#eaeaea'
+            entry_bg_color = '#3a3a3a'
+            entry_fg_color = '#eaeaea'
+            text_bg_color = '#202020'
+            text_fg_color = '#eaeaea'
+            button_bg_color = '#4a4a4a'
+            button_fg_color = '#ffffff'
+            accent_button_bg_color = '#007bff' # A blue accent
         else:
-            bg = '#f0f0f0'
-            fg = '#000000'
-            entry_bg = '#ffffff'
-            txt_bg = '#ffffff'
+            # Light theme colors
+            bg_color = '#f0f0f0'
+            fg_color = '#000000'
+            entry_bg_color = '#ffffff'
+            entry_fg_color = '#000000'
+            text_bg_color = '#ffffff'
+            text_fg_color = '#000000'
+            button_bg_color = '#e0e0e0'
+            button_fg_color = '#000000'
+            accent_button_bg_color = '#007bff' # Still blue accent
 
         try:
-            self.root.configure(bg=bg)
-            for widget in self.root.winfo_children():
-                try:
-                    widget.configure(bg=bg)
-                except Exception:
-                    pass
+            # Configure ttk styles
+            self.style.configure('TFrame', background=bg_color)
+            self.style.configure('TLabelframe', background=bg_color, foreground=fg_color)
+            self.style.configure('TLabelframe.Label', background=bg_color, foreground=fg_color)
+            self.style.configure('TLabel', background=bg_color, foreground=fg_color)
+            self.style.configure('TCheckbutton', background=bg_color, foreground=fg_color)
+            self.style.map('TCheckbutton',
+                           background=[('active', bg_color)],
+                           foreground=[('active', fg_color)])
 
-            # Specific widgets
-            self.log.configure(bg=txt_bg, fg=fg, insertbackground=fg)
-            self.path_entry.configure(bg=entry_bg, fg=fg)
-            self.stats_label.configure(bg=bg, fg=fg)
+            self.style.configure('TEntry', fieldbackground=entry_bg_color, foreground=entry_fg_color)
+
+            # General button style
+            self.style.configure('TButton',
+                                 background=button_bg_color,
+                                 foreground=button_fg_color,
+                                 bordercolor=button_bg_color,
+                                 lightcolor=button_bg_color,
+                                 darkcolor=button_bg_color,
+                                 relief='flat',
+                                 padding=(10, 5))
+            self.style.map('TButton',
+                           background=[('active', '#6a6a6a' if dark else '#c0c0c0')],
+                           foreground=[('active', button_fg_color)])
+
+            # Accent button style (for Start Watch)
+            self.style.configure('Accent.TButton',
+                                 background=accent_button_bg_color,
+                                 foreground='#ffffff',
+                                 bordercolor=accent_button_bg_color)
+            self.style.map('Accent.TButton',
+                           background=[('active', '#0056b3')]) # Darker blue on hover
+
+            # ScrolledText (not a ttk widget)
+            self.log.config(bg=text_bg_color, fg=text_fg_color, insertbackground=text_fg_color)
+            self.root.config(bg=bg_color) # Root window background
         except Exception:
             pass
 
