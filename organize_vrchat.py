@@ -254,7 +254,7 @@ class VRChatOrganizer:
             logger.error(f"Error getting dimensions for {image_path}: {e}")
             return None
     
-    def organize_month_folder(self, month_folder: Path, dry_run: bool = False) -> None:
+    def organize_month_folder(self, month_folder: Path, dry_run: bool = False) -> bool:
         """
         Organize all images in a month folder by world or into Prints folder.
         2048x1440 images go to Prints folder, others organized by world.
@@ -263,28 +263,34 @@ class VRChatOrganizer:
             month_folder: Path to the month folder (e.g., 2025-03)
             dry_run: If True, log actions without moving files
         """
-        logger.info(f"Processing {month_folder.name}...")
-        
         if self.watch_mode and not hasattr(self, '_seen_files'):
             self._seen_files = set()
+
+        # Find all candidate image files in this folder
+        image_files = [
+            f for f in month_folder.iterdir()
+            if f.is_file() and f.suffix.lower() in self.image_extensions
+        ]
+
+        if self.watch_mode:
+            image_files = [
+                f for f in image_files
+                if f.resolve() not in self._seen_files
+            ]
+            if not image_files:
+                return False
+
+        logger.info(f"Processing {month_folder.name}...")
         
         # Create Prints folder if it will be needed
         prints_folder = month_folder / "Prints"
         
-        # Find all image files in this folder
-        for image_file in month_folder.iterdir():
+        for image_file in image_files:
             if self.watch_mode and self._stop_event.is_set():
                 logger.info('Stop requested; exiting current month folder early')
-                return
-            if not image_file.is_file():
-                continue
-            
-            if image_file.suffix.lower() not in self.image_extensions:
-                continue
+                return True
             
             resolved_path = image_file.resolve()
-            if self.watch_mode and resolved_path in self._seen_files:
-                continue
             if self.watch_mode:
                 self._seen_files.add(resolved_path)
             
@@ -350,8 +356,9 @@ class VRChatOrganizer:
             except Exception as e:
                 logger.error(f"Failed to move {image_file.name}: {e}")
                 self.stats['errors'] += 1
+        return True
     
-    def organize_single_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> None:
+    def organize_single_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
         """
         Organize all images in a single folder by world.
         Optionally filters by software metadata.
@@ -361,10 +368,24 @@ class VRChatOrganizer:
             software_filter: Optional software string to filter by (e.g., "Adobe Photoshop Lightroom Classic 15.3 (Windows)")
             dry_run: If True, log actions without moving files
         """
-        logger.info(f"Processing folder: {folder.name}")
-        
         if self.watch_mode and not hasattr(self, '_seen_files'):
             self._seen_files = set()
+
+        # Find all candidate image files in this folder
+        image_files = [
+            f for f in folder.iterdir()
+            if f.is_file() and f.suffix.lower() in self.image_extensions
+        ]
+
+        if self.watch_mode:
+            image_files = [
+                f for f in image_files
+                if f.resolve() not in self._seen_files
+            ]
+            if not image_files:
+                return False
+
+        logger.info(f"Processing folder: {folder.name}")
         
         if software_filter:
             logger.info(f"Filtering by software: {software_filter}")
@@ -372,20 +393,12 @@ class VRChatOrganizer:
         # Create Prints folder reference
         prints_folder = folder / "Prints"
         
-        # Find all image files in this folder
-        for image_file in folder.iterdir():
+        for image_file in image_files:
             if self.watch_mode and self._stop_event.is_set():
                 logger.info('Stop requested; exiting current folder early')
-                return
-            if not image_file.is_file():
-                continue
-            
-            if image_file.suffix.lower() not in self.image_extensions:
-                continue
+                return True
             
             resolved_path = image_file.resolve()
-            if self.watch_mode and resolved_path in self._seen_files:
-                continue
             if self.watch_mode:
                 self._seen_files.add(resolved_path)
             
@@ -459,6 +472,7 @@ class VRChatOrganizer:
             except Exception as e:
                 logger.error(f"Failed to move {image_file.name}: {e}")
                 self.stats['errors'] += 1
+        return True
     
     def run(
         self,
@@ -474,50 +488,39 @@ class VRChatOrganizer:
             self._seen_files = set()
             self._stop_event.clear()
         
-        def run_once() -> None:
+        def run_once() -> bool:
             # If single_folder is specified, organize just that folder
             if single_folder:
-                logger.info(f"Starting VRChat screenshot organization in {single_folder}")
                 if not single_folder.exists():
                     logger.error(f"Path does not exist: {single_folder}")
-                    return
-                
-                self.organize_single_folder(single_folder, software_filter, dry_run=dry_run)
+                    return False
+
+                return self.organize_single_folder(single_folder, software_filter, dry_run=dry_run)
             else:
-                # Original behavior: find and process YYYY-MM month folders
-                logger.info(f"Starting VRChat screenshot organization in {self.base_path}")
-                
                 if not self.base_path.exists():
                     logger.error(f"Path does not exist: {self.base_path}")
-                    return
-                
+                    return False
+
                 # Find all month folders (YYYY-MM pattern)
                 month_folders = sorted([
                     d for d in self.base_path.iterdir()
                     if d.is_dir() and len(d.name) == 7 and d.name[4] == '-'
                 ])
-                
+
                 if not month_folders:
                     logger.warning(f"No month folders (YYYY-MM format) found in {self.base_path}")
-                    return
-                
-                logger.info(f"Found {len(month_folders)} month folders to process")
-                
+                    return False
+
+                any_changed = False
                 for month_folder in month_folders:
                     if self._stop_event.is_set():
                         logger.info('Stop requested; halting remaining month folders')
                         break
-                    self.organize_month_folder(month_folder, dry_run=dry_run)
-            
-            # Print summary
-            logger.info("\n" + "="*50)
-            logger.info("Organization Summary:")
-            logger.info(f"Total images processed: {self.stats['processed']}")
-            logger.info(f"Images organized: {self.stats['organized']}")
-            logger.info(f"Images without metadata: {self.stats['no_metadata']}")
-            logger.info(f"Errors: {self.stats['errors']}")
-            logger.info("="*50)
-        
+                    if self.organize_month_folder(month_folder, dry_run=dry_run):
+                        any_changed = True
+
+                return any_changed
+
         if watch:
             logger.info(f"Watch mode enabled, scanning every {interval} seconds")
             try:
@@ -525,8 +528,20 @@ class VRChatOrganizer:
                     if self._stop_event.is_set():
                         logger.info("Stop requested; exiting watch loop")
                         break
-                    run_once()
-                    logger.info(f"Sleeping for {interval} seconds before next scan...")
+
+                    stats_before = self.stats.copy()
+                    changed = run_once()
+
+                    if changed:
+                        logger.info("\n" + "="*50)
+                        logger.info("Watch scan summary:")
+                        logger.info(f"New images processed: {self.stats['processed'] - stats_before['processed']}")
+                        logger.info(f"Images organized: {self.stats['organized'] - stats_before['organized']}")
+                        logger.info(f"Images without metadata: {self.stats['no_metadata'] - stats_before['no_metadata']}")
+                        logger.info(f"Errors: {self.stats['errors'] - stats_before['errors']}")
+                        logger.info("="*50)
+                        logger.info(f"Sleeping for {interval} seconds before next scan...")
+
                     # Sleep in small increments to be responsive to stop requests
                     slept = 0
                     while slept < interval and not self._stop_event.is_set():
@@ -535,7 +550,15 @@ class VRChatOrganizer:
             except KeyboardInterrupt:
                 logger.info("Watch mode interrupted by user")
         else:
-            run_once()
+            changed = run_once()
+            if changed:
+                logger.info("\n" + "="*50)
+                logger.info("Organization Summary:")
+                logger.info(f"Total images processed: {self.stats['processed']}")
+                logger.info(f"Images organized: {self.stats['organized']}")
+                logger.info(f"Images without metadata: {self.stats['no_metadata']}")
+                logger.info(f"Errors: {self.stats['errors']}")
+                logger.info("="*50)
 
     def stop(self) -> None:
         """Request that a running watch loop stop."""
