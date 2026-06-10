@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['gui_vrchat_organizer.py'],
+    ['M:\\VRChat Screenshot Organizer\\gui_vrchat_organizer.py'],
     pathex=[],
     binaries=[],
     datas=[],

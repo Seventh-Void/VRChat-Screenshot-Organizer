@@ -8,6 +8,7 @@ Maintains year/month folder structure.
 import json
 import os
 import shutil
+import re
 import sys
 import subprocess
 from datetime import datetime # Added for template date variables
@@ -72,7 +73,8 @@ class VRChatOrganizer:
             'processed': 0,
             'organized': 0,
             'no_metadata': 0,
-            'errors': 0
+            'errors': 0,
+            'total': 0
         }
 
     def _parse_json_metadata(self, value) -> Optional[Dict]:
@@ -95,6 +97,34 @@ class VRChatOrganizer:
         while '__' in name:
             name = name.replace('__', '_')
         return name.strip('. ')
+
+    def _get_date_from_filename(self, filename: str) -> Optional[datetime]:
+        """Try to extract date from standard VRChat filename: VRChat_YYYY-MM-DD_..."""
+        match = re.search(r'VRChat_(\d{4})-(\d{2})-(\d{2})', filename)
+        if match:
+            try:
+                return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            except ValueError:
+                pass
+        return None
+
+    def _apply_template(self, template: str, world: str, date: datetime, width: int, height: int) -> str:
+        """Apply template variables and sanitize path components."""
+        # Map of variables
+        vars = {
+            "{world}": self._sanitize_name(world),
+            "{year}": date.strftime("%Y"),
+            "{month}": date.strftime("%m"),
+            "{day}": date.strftime("%d"),
+            "{width}": str(width),
+            "{height}": str(height)
+        }
+        
+        result = template
+        for placeholder, value in vars.items():
+            result = result.replace(placeholder, value)
+        
+        return result
 
     def _get_image_data(self, image_path: Path) -> Dict:
         """Extract all relevant metadata in a single pass."""
@@ -190,6 +220,9 @@ class VRChatOrganizer:
 
         if not image_files: return False
 
+        # Update total count for progress tracking
+        self.stats['total'] += len(image_files)
+
         if not self.watch_mode:
             logger.info(f"Processing folder: {folder.name}")
         
@@ -197,6 +230,7 @@ class VRChatOrganizer:
             if self.watch_mode and self._stop_event.is_set():
                 break
             
+            self.stats['processed'] += 1
             resolved_path = image_file.resolve()
             img_data = self._get_image_data(image_file)
 
@@ -208,37 +242,20 @@ class VRChatOrganizer:
                 current_template = template if template else "{world}"
 
                 # Get date components from file modification time
-                try:
-                    mod_timestamp = image_file.stat().st_mtime
-                    mod_datetime = datetime.fromtimestamp(mod_timestamp)
-                    year = mod_datetime.strftime("%Y")
-                    month = mod_datetime.strftime("%m")
-                    day = mod_datetime.strftime("%d")
-                except Exception:
-                    logger.warning(f"Could not get modification date for {image_file.name}, using current date for template.")
-                    now = datetime.now()
-                    year = now.strftime("%Y")
-                    month = now.strftime("%m")
-                    day = now.strftime("%d")
+                file_date = self._get_date_from_filename(image_file.name)
+                if not file_date:
+                    try:
+                        file_date = datetime.fromtimestamp(image_file.stat().st_mtime)
+                    except Exception:
+                        file_date = datetime.now()
 
-                # Get dimensions
-                width = img_data.get('width', 0)
-                height = img_data.get('height', 0)
-
-                # Replace placeholders
-                # Replace {world} first, if present
-                if "{world}" in current_template:
-                    temp_target_sub = current_template.replace("{world}", img_data['world_name'])
-                else:
-                    temp_target_sub = current_template # If {world} not in template, use template as is
-
-                temp_target_sub = temp_target_sub.replace("{year}", year)
-                temp_target_sub = temp_target_sub.replace("{month}", month)
-                temp_target_sub = temp_target_sub.replace("{day}", day)
-                temp_target_sub = temp_target_sub.replace("{width}", str(width))
-                temp_target_sub = temp_target_sub.replace("{height}", str(height))
-
-                target_sub = self._sanitize_name(temp_target_sub)
+                target_sub = self._apply_template(
+                    current_template, 
+                    img_data['world_name'],
+                    file_date,
+                    img_data.get('width', 0),
+                    img_data.get('height', 0)
+                )
 
             if not target_sub:
                 if self.watch_mode:
@@ -247,10 +264,8 @@ class VRChatOrganizer:
                     self.stats['no_metadata'] += 1
                 continue
 
-            self.stats['processed'] += 1
-
             dest_folder = folder / target_sub
-            if not dry_run: dest_folder.mkdir(exist_ok=True)
+            if not dry_run: dest_folder.mkdir(parents=True, exist_ok=True)
 
             dest_path = dest_folder / image_file.name
             counter = 1
@@ -292,6 +307,13 @@ class VRChatOrganizer:
         template: str = "{world}"
     ) -> None:
         """Run the organization process."""
+        # Reset stats for a fresh run
+        self.stats['processed'] = 0
+        self.stats['organized'] = 0
+        self.stats['no_metadata'] = 0
+        self.stats['errors'] = 0
+        self.stats['total'] = 0
+
         self.watch_mode = watch
         if watch:
             self._seen_files = set()
@@ -312,9 +334,10 @@ class VRChatOrganizer:
                     return False
 
                 # Find all month folders (YYYY-MM pattern)
+                month_pattern = re.compile(r'^\d{4}-\d{2}$')
                 month_folders = sorted([
                     d for d in self.base_path.iterdir()
-                    if d.is_dir() and len(d.name) == 7 and d.name[4] == '-'
+                    if d.is_dir() and month_pattern.match(d.name)
                 ])
                 if not month_folders:
                     logger.warning(f"No month folders (YYYY-MM format) found in {self.base_path}")

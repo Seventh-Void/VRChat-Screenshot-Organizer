@@ -172,7 +172,7 @@ class App:
         self.stats_label = ttk.Label(stats_frame, text='Processed: 0 | Organized: 0 | No metadata: 0 | Errors: 0')
         self.stats_label.pack(side=tk.LEFT, anchor='w')
 
-        self.progress = ttk.Progressbar(stats_frame, mode='indeterminate', length=150)
+        self.progress = ttk.Progressbar(stats_frame, mode='determinate', length=150)
         self.progress.pack(side=tk.RIGHT, padx=5)
 
         # Handle window closing to save settings
@@ -296,7 +296,7 @@ class App:
     def _clear_log_if_inactive(self):
         """Clears the log if no new activity has occurred."""
         # Only clear if the log is not empty
-        if self.log.compare("end-1c", "!=", "1.0"): # Check if there's any text
+        if self.root.winfo_exists() and self.log.compare("end-1c", "!=", "1.0"): # Check if there's any text
             self.clear_log()
             logger.info("Log cleared due to inactivity.")
         self.log_clear_timer_id = None # Reset timer ID after clearing
@@ -314,19 +314,18 @@ class App:
             self.stop_btn.config(state=tk.NORMAL)
             self.run_btn.config(state=tk.DISABLED)
             self.preview_btn.config(state=tk.DISABLED)
-            self.progress.start(10)
         elif state == "busy":
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.DISABLED)
             self.run_btn.config(state=tk.DISABLED)
             self.preview_btn.config(state=tk.DISABLED)
-            self.progress.start(10)
         else: # idle
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
             self.run_btn.config(state=tk.NORMAL)
             self.preview_btn.config(state=tk.NORMAL)
             self.progress.stop()
+            self.progress['value'] = 0
 
     def browse(self):
         # start directory in sensible default (existing entry or Pictures/VRChat)
@@ -570,6 +569,7 @@ WantedBy=default.target
             'organized': 0,
             'no_metadata': 0,
             'errors': 0,
+            'total': 0
         }
         if self.organizer and hasattr(self.organizer, 'stats'):
             try:
@@ -580,6 +580,14 @@ WantedBy=default.target
         self.stats_label.config(
             text=f"Processed: {stats['processed']} | Organized: {stats['organized']} | No metadata: {stats['no_metadata']} | Errors: {stats['errors']}"
         )
+
+        # Update progress bar
+        if stats['total'] > 0:
+            self.progress['maximum'] = stats['total']
+            self.progress['value'] = stats['processed']
+        else:
+            self.progress['value'] = 0
+
         # Schedule next update
         try:
             self.root.after(1000, self.update_stats)
