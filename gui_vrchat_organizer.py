@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Simple Tkinter GUI for VRChat Organizer"""
 import threading
+import json
 import queue
 import logging
 import sys
@@ -71,7 +72,7 @@ class App:
         path_frame = ttk.Frame(controls_frame)
         path_frame.pack(fill=tk.X, padx=5, pady=5)
         ttk.Label(path_frame, text='Base Path:').pack(side=tk.LEFT, padx=(0, 5))
-        self.path_var = tk.StringVar(value=str(Path.home() / 'Pictures' / 'VRChat' / 'VRChat')) # Default path
+        self.path_var = tk.StringVar() 
         self.path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=60)
         self.path_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
         ttk.Button(path_frame, text='Browse', command=self.browse).pack(side=tk.LEFT, padx=(0, 5))
@@ -93,10 +94,11 @@ class App:
         self.scan_all_months_var = tk.BooleanVar(value=False) # New toggle
         ttk.Checkbutton(options_frame, text='Scan All Month Folders (default is latest month only)', variable=self.scan_all_months_var).grid(row=2, column=0, columnspan=2, sticky='w', pady=(0,5))
 
-        # Software filter
-        self.software_var = tk.StringVar()
-        ttk.Label(options_frame, text='Software Filter (optional):').grid(row=3, column=0, sticky='w', padx=(0, 5))
-        ttk.Entry(options_frame, textvariable=self.software_var, width=30).grid(row=3, column=1, sticky='w')
+        # Manual Organization Structure (Template)
+        self.template_var = tk.StringVar(value="{world}")
+        ttk.Label(options_frame, text='Subfolder Template:').grid(row=3, column=0, sticky='w', padx=(0, 5))
+        self.template_entry = ttk.Entry(options_frame, textvariable=self.template_var, width=30)
+        self.template_entry.grid(row=3, column=1, sticky='w')
 
         # Theme toggle
         ttk.Checkbutton(options_frame, text='Dark Mode', variable=self.dark_mode, command=self.apply_theme).grid(row=0, column=2, sticky='e', padx=(20,0))
@@ -107,14 +109,17 @@ class App:
 
         self.start_btn = ttk.Button(btn_frame, text='▶ Start Watch', command=self.start_watch, style='Accent.TButton')
         self.start_btn.pack(side=tk.LEFT, padx=(0, 5))
-        self.stop_btn = ttk.Button(btn_frame, text='■ Stop', command=self.stop_watch, state=tk.DISABLED)
+        self.stop_btn = ttk.Button(btn_frame, text='⏹ Stop', command=self.stop_watch, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
         self.run_btn = ttk.Button(btn_frame, text='⟳ Run Once', command=self.run_once)
         self.run_btn.pack(side=tk.LEFT, padx=(0, 5))
         self.preview_btn = ttk.Button(btn_frame, text='🔍 Preview (Dry-Run)', command=self.preview)
         self.preview_btn.pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text='⚙️ Install Autostart', command=self.install_autostart).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text='🗑️ Clear Log', command=self.clear_log).pack(side=tk.LEFT, padx=(0, 5))
+        self.autostart_btn = ttk.Button(btn_frame, text='⚙️ Install Autostart', command=self.install_autostart)
+        self.autostart_btn.pack(side=tk.LEFT)
+        self.clear_log_btn = ttk.Button(btn_frame, text='🗑️ Clear Log', command=self.clear_log)
+        self.clear_log_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text='❓ Help', command=self.show_help).pack(side=tk.LEFT)
 
         # Stats
         stats_frame = ttk.Frame(root)
@@ -124,6 +129,9 @@ class App:
 
         self.progress = ttk.Progressbar(stats_frame, mode='indeterminate', length=150)
         self.progress.pack(side=tk.RIGHT, padx=5)
+
+        # Handle window closing to save settings
+        root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Log area
         self.log = scrolledtext.ScrolledText(root, height=15, wrap=tk.WORD, state=tk.DISABLED) # Disable editing
@@ -148,9 +156,69 @@ class App:
         # Initial button states
         self._set_ui_state("idle")
         
+        # Load saved settings
+        self.load_settings()
+
         self._schedule_log_clear() # Start the initial log clear timer
+        
+        # Auto-detect path on startup silently if no valid path is loaded
+        current_path = self.path_var.get()
+        if not current_path or not Path(current_path).exists():
+            self.autodetect_path(silent=True)
+            
         # Start polling the log queue
         self.poll_log_queue()
+        self.add_tooltips()
+
+    def add_tooltips(self):
+        """Add tooltips to UI elements."""
+        ToolTip(self.path_entry, "The main folder where your VRChat screenshots are saved.")
+        ToolTip(self.template_entry, "Subfolder structure. Variables: {world}, {year}, {month}, {day}, {width}, {height}")
+        ToolTip(self.start_btn, "Begin monitoring your folder for new screenshots in real-time.")
+        ToolTip(self.stop_btn, "Stop the active folder monitoring.")
+        ToolTip(self.run_btn, "Scan and organize existing screenshots once without watching.")
+        ToolTip(self.preview_btn, "See what changes would be made without moving any files.")
+        ToolTip(self.autostart_btn, "Configure this app to start automatically when you log in.")
+        ToolTip(self.clear_log_btn, "Clear the message history shown in the window below.")
+        ToolTip(self.progress, "Indicates when the organizer is actively processing files.")
+
+    def get_config_path(self):
+        """Get path for the settings file."""
+        return Path(os.path.dirname(os.path.abspath(__file__))) / "gui_settings.json"
+
+    def load_settings(self):
+        """Load settings from JSON file."""
+        config_path = self.get_config_path()
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    data = json.load(f)
+                    self.path_var.set(data.get('path', ''))
+                    self.interval_var.set(data.get('interval', 5))
+                    self.single_var.set(data.get('single_folder', False))
+                    self.scan_all_months_var.set(data.get('scan_all_months', False))
+                    self.template_var.set(data.get('template', '{world}'))
+                    self.dark_mode.set(data.get('dark_mode', False))
+                    self.apply_theme() # Re-apply theme after loading dark_mode state
+            except Exception as e:
+                logger.error(f"Failed to load settings: {e}")
+
+    def save_settings(self):
+        """Save current settings to JSON file."""
+        config_path = self.get_config_path()
+        data = {
+            'path': self.path_var.get(),
+            'interval': self.interval_var.get(),
+            'single_folder': self.single_var.get(),
+            'scan_all_months': self.scan_all_months_var.get(),
+            'template': self.template_var.get(),
+            'dark_mode': self.dark_mode.get()
+        }
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to save settings: {e}")
 
     def poll_log_queue(self):
         """Check the log queue and update the text widget."""
@@ -216,7 +284,7 @@ class App:
         if p:
             self.path_var.set(p)
 
-    def autodetect_path(self):
+    def autodetect_path(self, silent=False):
         """Try to find the VRChat pictures folder automatically."""
         # Common default
         candidates = []
@@ -265,10 +333,12 @@ class App:
 
         if chosen:
             self.path_var.set(str(chosen))
-            messagebox.showinfo('Auto-detect', f'Auto-detected path: {chosen}')
+            if not silent:
+                messagebox.showinfo('Auto-detect', f'Auto-detected path: {chosen}')
             logger.info('Auto-detected VRChat path: %s', chosen)
         else:
-            messagebox.showwarning('Auto-detect', 'Could not auto-detect VRChat pictures folder')
+            if not silent:
+                messagebox.showwarning('Auto-detect', 'Could not auto-detect VRChat pictures folder')
 
     def ensure_organizer(self):
         base = self.path_var.get() or str(Path.home() / 'Pictures' / 'VRChat' / 'VRChat')
@@ -280,17 +350,26 @@ class App:
         if self.thread and self.thread.is_alive():
             logger.info('Watch already running')
             return
+
+        # Added confirmation warning
+        confirm = messagebox.askyesno(
+            "Confirm Watch Mode",
+            "Are you sure you want to start Watch Mode?\n\n"
+            "It is highly recommended to run a 'Preview (Dry-Run)' first if you haven't already to ensure the organization logic matches your expectations."
+        )
+        if not confirm:
+            return
+
         org = self.ensure_organizer()
         interval = max(1, int(self.interval_var.get()))
         single = self.single_var.get()
-        software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
             'scan_all_months': self.scan_all_months_var.get(), # Pass new toggle
-            'software_filter': software,
             'dry_run': False,
             'watch': True,
             'interval': interval,
+            'template': self.template_var.get()
         }
         def target():
             try:
@@ -311,13 +390,12 @@ class App:
     def run_once(self):
         org = self.ensure_organizer()
         single = self.single_var.get()
-        software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
             'scan_all_months': self.scan_all_months_var.get(),
-            'software_filter': software,
             'dry_run': False,
             'watch': False,
+            'template': self.template_var.get()
         }
         
         def task():
@@ -333,13 +411,12 @@ class App:
     def preview(self):
         org = self.ensure_organizer()
         single = self.single_var.get()
-        software = self.software_var.get() or None
         args = {
             'single_folder': Path(self.path_var.get()) if single else None,
             'scan_all_months': self.scan_all_months_var.get(),
-            'software_filter': software,
             'dry_run': True,
             'watch': False,
+            'template': self.template_var.get()
         }
 
         def task():
@@ -422,6 +499,19 @@ WantedBy=default.target
         except Exception as e:
             messagebox.showerror('Error', f'Failed to write service file: {e}')
             logger.exception('Failed to write systemd user service: %s', e)
+
+    def show_help(self):
+        """Show help information."""
+        help_text = (
+            "VRChat Organizer Help\n\n"
+            "• Base Path: Where your VRChat screenshots live (e.g. Pictures/VRChat/VRChat).\n"
+            "• Watch Interval: How often (in seconds) the app checks for new images.\n"
+            "• Single Folder: If checked, the app organizes the target folder directly instead of looking for YYYY-MM subfolders.\n"
+            "• Scan All Months: Organizes your entire screenshot history instead of just the latest month.\n"
+            "• Subfolder Template: How world folders are named. Use {world} as a placeholder for the VRChat world name. You can also use {year}, {month}, {day} for the screenshot's date, and {width}, {height} for its dimensions.\n\n"
+            "💡 Pro Tip: Hover over any button for a quick hint!"
+        )
+        messagebox.showinfo("About / Help", help_text)
 
     def update_stats(self):
         stats = {
@@ -509,6 +599,11 @@ WantedBy=default.target
             self.root.config(bg=bg_color) # Root window background
         except Exception:
             pass
+
+    def on_closing(self):
+        """Action to perform when the window is closed."""
+        self.save_settings()
+        self.root.destroy()
 
 if __name__ == '__main__':
     root = tk.Tk()

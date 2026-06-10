@@ -81,12 +81,21 @@ python3 organize_vrchat.py [PATH] [OPTIONS]
   - Organizing a specific month folder
   - Custom folder structures
 
-#### `--software-filter SOFTWARE_STRING`
-- **Description**: Only process images from specific software
-- **Usage**: `python3 organize_vrchat.py /path --software-filter "Adobe Photoshop Lightroom"`
-- **When to use**:
-  - You only want to organize edited screenshots
-  - Filter by capture software or editor
+#### `--template TEMPLATE_STRING`
+- **Description**: Define a custom naming structure for the subfolders where screenshots will be moved.
+- **Usage**: `python3 organize_vrchat.py /path --template "{world} ({width}x{height})"`
+- **Available Variables**:
+  - `{world}`: The name of the VRChat world (e.g., "Black Cat").
+  - `{year}`: The year the screenshot was taken (e.g., "2023").
+  - `{month}`: The month the screenshot was taken (e.g., "01" for January).
+  - `{day}`: The day the screenshot was taken (e.g., "15").
+  - `{width}`: The width of the screenshot in pixels (e.g., "1920").
+  - `{height}`: The height of the screenshot in pixels (e.g., "1080").
+- **Examples**:
+  - `--template "{world}"` (Default behavior)
+  - `--template "{year}-{month}/{world}"` (Creates "2023-01/Black Cat" structure)
+  - `--template "{world} ({width}x{height})"` (Creates "Black Cat (1920x1080)" folders)
+  - `--template "{world} - {day}-{month}-{year}"` (Creates "Black Cat - 15-01-2023" folders)
 
 ## Example Use Cases
 

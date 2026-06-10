@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import subprocess
+from datetime import datetime # Added for template date variables
 import time
 import threading
 from pathlib import Path
@@ -97,10 +98,11 @@ class VRChatOrganizer:
 
     def _get_image_data(self, image_path: Path) -> Dict:
         """Extract all relevant metadata in a single pass."""
-        data = {'dimensions': None, 'world_name': None, 'software': None}
+        data = {'dimensions': None, 'world_name': None, 'software': None, 'width': 0, 'height': 0}
         try:
             with Image.open(image_path) as image:
                 data['dimensions'] = image.size
+                data['width'], data['height'] = image.size
                 if hasattr(image, 'info') and image.info:
                     for key in ['Software', 'software', 'CreatorTool', 'creator_tool']:
                         if key in image.info:
@@ -163,7 +165,7 @@ class VRChatOrganizer:
         """Legacy method maintained for compatibility."""
         return self._get_image_data(image_path).get('dimensions')
 
-    def _process_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
+    def _process_folder(self, folder: Path, dry_run: bool = False, template: str = "{world}") -> bool:
         """Unified logic to process images in a folder."""
         try:
             image_files = [
@@ -190,7 +192,6 @@ class VRChatOrganizer:
 
         if not self.watch_mode:
             logger.info(f"Processing folder: {folder.name}")
-            if software_filter: logger.info(f"Filtering by software: {software_filter}")
         
         for image_file in image_files:
             if self.watch_mode and self._stop_event.is_set():
@@ -198,18 +199,46 @@ class VRChatOrganizer:
             
             resolved_path = image_file.resolve()
             img_data = self._get_image_data(image_file)
-            
-            if software_filter:
-                software = img_data['software']
-                if not software or software_filter not in software:
-                    self.stats['no_metadata'] += 1
-                    continue
 
             target_sub = None
             if img_data['dimensions'] == (2048, 1440):
                 target_sub = "Prints"
             elif img_data['world_name']:
-                target_sub = img_data['world_name']
+                # Start with the template, or default to "{world}" if template is empty
+                current_template = template if template else "{world}"
+
+                # Get date components from file modification time
+                try:
+                    mod_timestamp = image_file.stat().st_mtime
+                    mod_datetime = datetime.fromtimestamp(mod_timestamp)
+                    year = mod_datetime.strftime("%Y")
+                    month = mod_datetime.strftime("%m")
+                    day = mod_datetime.strftime("%d")
+                except Exception:
+                    logger.warning(f"Could not get modification date for {image_file.name}, using current date for template.")
+                    now = datetime.now()
+                    year = now.strftime("%Y")
+                    month = now.strftime("%m")
+                    day = now.strftime("%d")
+
+                # Get dimensions
+                width = img_data.get('width', 0)
+                height = img_data.get('height', 0)
+
+                # Replace placeholders
+                # Replace {world} first, if present
+                if "{world}" in current_template:
+                    temp_target_sub = current_template.replace("{world}", img_data['world_name'])
+                else:
+                    temp_target_sub = current_template # If {world} not in template, use template as is
+
+                temp_target_sub = temp_target_sub.replace("{year}", year)
+                temp_target_sub = temp_target_sub.replace("{month}", month)
+                temp_target_sub = temp_target_sub.replace("{day}", day)
+                temp_target_sub = temp_target_sub.replace("{width}", str(width))
+                temp_target_sub = temp_target_sub.replace("{height}", str(height))
+
+                target_sub = self._sanitize_name(temp_target_sub)
 
             if not target_sub:
                 if self.watch_mode:
@@ -247,20 +276,20 @@ class VRChatOrganizer:
 
     def organize_month_folder(self, month_folder: Path, dry_run: bool = False) -> bool:
         """Organize month folder using unified logic."""
-        return self._process_folder(month_folder, dry_run=dry_run)
+        return self._process_folder(month_folder, dry_run=dry_run, template="{world}")
 
-    def organize_single_folder(self, folder: Path, software_filter: Optional[str] = None, dry_run: bool = False) -> bool:
+    def organize_single_folder(self, folder: Path, dry_run: bool = False, template: str = "{world}") -> bool:
         """Organize single folder using unified logic."""
-        return self._process_folder(folder, software_filter, dry_run)
+        return self._process_folder(folder, dry_run, template)
 
     def run(
         self,
         single_folder: Optional[Path] = None,
-        software_filter: Optional[str] = None,
         dry_run: bool = False,
         scan_all_months: bool = False, # New parameter
         watch: bool = False,
         interval: int = 5,
+        template: str = "{world}"
     ) -> None:
         """Run the organization process."""
         self.watch_mode = watch
@@ -276,7 +305,7 @@ class VRChatOrganizer:
                 if not single_folder.exists():
                     logger.error(f"Path does not exist: {single_folder}")
                     return False
-                return self._process_folder(single_folder, software_filter, dry_run=dry_run)
+                return self._process_folder(single_folder, dry_run=dry_run, template=template)
             else:
                 if not self.base_path.exists():
                     logger.error(f"Path does not exist: {self.base_path}")
@@ -298,7 +327,7 @@ class VRChatOrganizer:
                         if self._stop_event.is_set():
                             logger.info('Stop requested; halting remaining month folders')
                             break
-                        if self._process_folder(month_folder, software_filter, dry_run=dry_run):
+                        if self._process_folder(month_folder, dry_run=dry_run, template=template):
                             any_changed = True
                 else:
                     # Pick the most recent folder (last one in sorted list)
@@ -306,7 +335,7 @@ class VRChatOrganizer:
                     if not self.watch_mode or self._last_month_folder != target_folder:
                         logger.info(f"Automatically targeting most recent month: {target_folder.name}")
                         self._last_month_folder = target_folder
-                    if self._process_folder(target_folder, software_filter, dry_run=dry_run):
+                    if self._process_folder(target_folder, dry_run=dry_run, template=template):
                         any_changed = True
                 return any_changed
 
@@ -382,12 +411,11 @@ def main():
         help='Scan all month folders instead of just the latest one'
     )
     parser.add_argument(
-        '--software-filter',
+        '--template',
         type=str,
-        default=None,
-        help='Only process images from a specific software (e.g., "Adobe Photoshop Lightroom Classic 15.3 (Windows)")'
+        default="{world}",
+        help='Custom subfolder naming template (e.g., "{world}", "{year}-{month}/{world}"). Variables: {world}, {year}, {month}, {day}, {width}, {height}'
     )
-    
     args = parser.parse_args()
     
     # Determine the path
@@ -407,11 +435,11 @@ def main():
     organizer = VRChatOrganizer(base_path)
     organizer.run(
         single_folder=Path(base_path) if args.single_folder else None,
-        software_filter=args.software_filter,
         scan_all_months=args.scan_all_months,
         dry_run=args.dry_run,
         watch=args.watch,
         interval=args.interval,
+        template=args.template
     )
 
 

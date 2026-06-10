@@ -4,8 +4,35 @@
 import json
 import sys
 from pathlib import Path
+from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS
+
+def preview_template(image_path, image, info):
+    """Preview what the folder name would be with the default template."""
+    world_name = "Unknown World"
+    # Basic world name extraction for preview
+    for key in ['Description', 'Comment', 'comment', 'description']:
+        val = info.get(key)
+        if val:
+            try:
+                val_str = val.decode('utf-8', errors='ignore') if isinstance(val, bytes) else str(val)
+                data = json.loads(val_str)
+                if 'world' in data:
+                    world_name = data['world'].get('name', 'Unknown World')
+                    break
+            except: pass
+    
+    mod_time = datetime.fromtimestamp(image_path.stat().st_mtime)
+    w, h = image.size
+    
+    print("\n📂 Template Variable Preview:")
+    print(f"  {{world}}  -> {world_name}")
+    print(f"  {{year}}   -> {mod_time.strftime('%Y')}")
+    print(f"  {{month}}  -> {mod_time.strftime('%m')}")
+    print(f"  {{day}}    -> {mod_time.strftime('%d')}")
+    print(f"  {{width}}  -> {w}")
+    print(f"  {{height}} -> {h}")
 
 def inspect_image(image_path):
     """Inspect all metadata in an image file."""
@@ -81,6 +108,9 @@ def inspect_image(image_path):
         else:
             print("  (no EXIF data)")
         
+        # Show template preview
+        preview_template(image_path, image, image.info)
+
         # Try to extract with exiftool if available
         print("\n🔧 Alternative: Using exiftool (if available):")
         import subprocess

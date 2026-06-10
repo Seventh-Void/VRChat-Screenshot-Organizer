@@ -10,7 +10,7 @@
 - ✨ **Automatic World Detection** - Reads world metadata from VRChat screenshot EXIF/metadata
 - 📁 **Smart Organization** - Creates world-named subfolders within each month folder
 - 👁️ **Preview Mode** - See what will be organized before making any changes
-- 📊 **Detailed Logging** - Track exactly what's happening with comprehensive logs
+- 📊 **Detailed Logging** - Track exactly what's happening with comprehensive logs and real-time GUI updates
 - 🛡️ **Safe Operations** - Automatically handles duplicate filenames and edge cases
 - 🎨 **Print Handling** - Automatically separates 2048x1440 prints into a dedicated "Prints" folder
 - 📅 **Bulk Scanning** - Option to scan all historical month folders at once
@@ -137,9 +137,11 @@ optional arguments:
   -h, --help           Show this help message and exit
   --dry-run            Show what would be done without making changes
   --watch              Keep monitoring the folder and organize automatically
-  --interval INTERVAL  Watch interval in seconds (default: 30)
-  --single-folder      Treat path as a single folder to organize
-  --software-filter    Only process images from specific software
+  --interval INTERVAL  Watch interval in seconds (default: 5)
+  --single-folder      Treat path as a single folder to organize (not as a root with YYYY-MM folders)
+  --scan-all-months    Scan all month folders instead of just the latest one
+  --template TEMPLATE  Custom subfolder naming template (e.g., "{world}", "{year}-{month}/{world}").
+                       Available variables: {world}, {year}, {month}, {day}, {width}, {height}
 ```
 
 ### Examples
@@ -157,9 +159,8 @@ python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --scan-all-months
 # Watch mode with custom interval
 python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 60
 
-# Filter by software (e.g., only Lightroom exports)
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat \
-  --software-filter "Adobe Photoshop Lightroom"
+# Organize into "YYYY-MM/World Name (WidthxHeight)" folders using a template
+python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --template "{year}-{month}/{world} ({width}x{height})"
 ```
 
 ### Folder Structure
