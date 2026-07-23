@@ -472,8 +472,6 @@ pub fn organize_single_file(file_path: &Path, config: &OrganizerConfig, stats: &
         stats.no_metadata += 1;
     }
 
-    Ok(())
-}
 
 fn process_folder(folder: &Path, config: &OrganizerConfig, stats: &mut OrganizerStats) -> Result<()> {
     let mut image_files: Vec<PathBuf> = WalkDir::new(folder)

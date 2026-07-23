@@ -1,15 +1,17 @@
-# Bug Fix: Watch mode organizes files into wrong location
+# README.md Update Plan ✅
 
 ## Steps
-
-- [x] Analyze the bug and gather information
-- [x] Get user approval on the plan
-- [x] **Step 1**: Add `organize_single_file` function in `organizer-core/src/lib.rs` that:
-  - Checks if the file's parent directory is a YYYY-MM folder
-  - If so, uses that parent as the base for destination
-  - If not, extracts date from filename and creates the YYYY-MM path
-  - Computes destination as `YYYY-MM/worldname/filename`
-- [x] **Step 2**: Update the watch loop in `src-tauri/src/lib.rs` to call `organize_single_file` instead of `organize_path` for per-file events and polling
-- [x] **Step 3**: Build the project to verify compilation — build succeeds, all 2 tests pass
-- [x] **Step 4**: Delete old AppImages and build fresh AppImage — done
+- [x] **Step 0**: Analyze project structure and gather information from all relevant files
+- [x] **Step 1**: Get user approval on the plan
+- [x] **Step 2**: Rewrite README.md to reflect:
+  - Rust rewrite (no Python/Pillow)
+  - Tauri v2 GUI desktop app
+  - CLI env-var-based config
+  - Undo system (`.vrchat-organizer-undo.json`)
+  - Watch mode with event + polling
+  - Per-world stats and activity log
+  - Updated project structure (Rust workspace)
+  - Updated build instructions (`cargo build -p desktop` / `-p app`)
+  - Updated dependencies/acknowledgments
+  - Updated troubleshooting for Rust binaries
 
