@@ -1,4 +1,4 @@
-use organizer_core::{organize_path, undo_organization, OrganizerConfig, OrganizerStats};
+use organizer_core::{organize_path, organize_single_file, undo_organization, OrganizerConfig, OrganizerStats};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -237,9 +237,9 @@ async fn start_watching(
             // Small delay to let the file finish writing
             std::thread::sleep(Duration::from_millis(500));
 
-            // Run organize
+            // Run organize on this single file, preserving its YYYY-MM parent folder
             let mut stats = OrganizerStats::default();
-            if let Err(e) = organize_path(&config_clone, &mut stats) {
+            if let Err(e) = organize_single_file(path, &config_clone, &mut stats) {
               let _ = app_handle.emit("watch-error", serde_json::json!({
                 "error": e.to_string(),
                 "file": path.to_string_lossy()
@@ -282,9 +282,9 @@ async fn start_watching(
             // New file found via polling!
             new_files_found = true;
 
-            // Run organize
+            // Run organize on this single file, preserving its YYYY-MM parent folder
             let mut stats = OrganizerStats::default();
-            if let Err(e) = organize_path(&config_clone, &mut stats) {
+            if let Err(e) = organize_single_file(&path, &config_clone, &mut stats) {
               let _ = app_handle.emit("watch-error", serde_json::json!({
                 "error": e.to_string(),
                 "file": path.to_string_lossy()
