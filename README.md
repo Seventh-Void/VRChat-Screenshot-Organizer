@@ -3,40 +3,31 @@
 > Automatically organize your VRChat screenshots by world while maintaining your year/month folder structure
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.7+](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/downloads/)
 
 ## 🎯 Features
 
-- ✨ **Automatic World Detection** - Reads world metadata from VRChat screenshot EXIF/metadata
+- ✨ **Automatic World Detection** - Reads world metadata from VRChat screenshot EXIF/PNG text chunks
 - 📁 **Smart Organization** - Creates world-named subfolders within each month folder
-- 👁️ **Preview Mode** - See what will be organized before making any changes
-- 📊 **Detailed Logging** - Track exactly what's happening with comprehensive logs and real-time GUI updates
 - 🛡️ **Safe Operations** - Automatically handles duplicate filenames and prevents overwriting
-- 🎨 **Print Handling** - Automatically separates 2048x1440 prints into a dedicated "Prints" folder
+- 🎨 **Print Handling** - Automatically separates 2048×1440 prints into a dedicated "Prints" folder
 - 📅 **Bulk Scanning** - Option to scan all historical month folders at once
-- 🌙 **Visual Themes** - Native dark mode support and modern UI styling
-- 💡 **User Friendly** - Comprehensive tooltips and High DPI scaling support for 4K monitors
-- 🕒 **Auto-Cleanup** - GUI logs automatically clear after inactivity to stay tidy
-- ⚙️ **Autostart Setup** - Easily install startup entries for Windows and Linux (systemd)
-- 🖥️ **GUI & CLI** - Use either a graphical interface or command-line tools
-- 📦 **Standalone AppImage** - Deploy as a single executable file on Linux
-- 👀 **Watch Mode** - Automatically organize new screenshots as they're created
+- 🖥️ **CLI & Tauri GUI** - Use either command-line tools or the Tauri desktop app
+- 📦 **Standalone Binary** - Single executable, no runtime dependencies needed
+- ⚡ **Pure Rust** - Fast, memory-safe, no Python or external runtime required
 
 ## 📋 Requirements
 
-- **Python 3.7 or higher**
-- **Pillow library** (automatically installed on first run)
 - **[VRCX](https://github.com/vrcx-team/VRCX)** installed and running
   - Required to embed world metadata in screenshots
   - Must enable **"Screenshot Metadata"** in VRCX settings
-  - Must be running in background for watch mode to work
+  - Must be running in background for organization to work
 
 ### ⚠️ Important: VRCX Setup Required
 
 This tool reads world metadata that **VRCX embeds into your screenshots**. Without VRCX:
 
 1. **No metadata embedded** → screenshots won't be organized
-2. **VRCX must be running** → especially for watch mode
+2. **VRCX must be running** → for proper metadata embedding
 3. **Enable in settings** → Go to VRCX Settings → Enable "Screenshot Metadata"
 
 If you see "No world metadata found" messages, verify VRCX is running and Screenshot Metadata is enabled.
@@ -51,7 +42,7 @@ This project has been developed with assistance from an AI coding tool. While th
 
 1. **Always run with `--dry-run` first:**
    ```bash
-   python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --dry-run
+   ./vrchat-organizer ~/Pictures/VRChat/VRChat --dry-run
    ```
    Review the output carefully. If you don't like what you see, **do not proceed**.
 
@@ -70,55 +61,53 @@ This project has been developed with assistance from an AI coding tool. While th
 
 ## 🚀 Quick Start
 
+### Download
+
+Grab the latest AppImage from the [releases page](https://github.com/yourusername/VRChat-Screenshot-Organizer/releases) or build from source.
+
 ### Before You Start
 
 1. **Install VRCX**: Download from [github.com/vrcx-team/VRCX](https://github.com/vrcx-team/VRCX)
 2. **Enable Screenshot Metadata**: In VRCX Settings → Media → Enable "Screenshot Metadata"
-3. **Keep VRCX Running**: Especially if using watch mode
+3. **Keep VRCX Running** — metadata is embedded at screenshot time
 
-### Option 1: Command Line
+### Usage
 
-#### Windows
-1. Install [Python 3](https://www.python.org/downloads/) (Check "Add Python to PATH")
-2. Open Command Prompt and run:
-   ```cmd
-   pip install Pillow
-   python organize_vrchat.py "C:\Users\YourName\Pictures\VRChat\VRChat"
-   ```
-
-#### Linux
 ```bash
-# Preview what will be organized (no changes made)
-python3 preview_vrchat.py ~/Pictures/VRChat/VRChat
+# Make the AppImage executable
+chmod +x VRChatOrganizer-x86_64.AppImage
 
-# Run the actual organization
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat
+# Dry run — preview what will happen (no actual changes)
+./VRChatOrganizer-x86_64.AppImage ~/Pictures/VRChat/VRChat --dry-run
 
-# Watch mode: automatically organize new screenshots (VRCX must be running!)
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 30
+# Run organization on your VRChat screenshots folder
+./VRChatOrganizer-x86_64.AppImage ~/Pictures/VRChat/VRChat
+
+# Use a custom subfolder naming template
+./VRChatOrganizer-x86_64.AppImage ~/Pictures/VRChat/VRChat --template "{year}-{month}/{world}"
+
+# Scan all historical month folders, not just the latest
+./VRChatOrganizer-x86_64.AppImage ~/Pictures/VRChat/VRChat --scan-all-months
+
+# Treat the path as a single folder (no YYYY-MM structure)
+./VRChatOrganizer-x86_64.AppImage ~/Pictures/VRChat/Screenshots --single-folder
 ```
 
-### Option 2: Graphical Interface
-
-#### Windows
-1. Download the `VRChatOrganizer.exe` from the releases page.
-2. Double-click the executable.
-3. *Alternatively, if you have Python installed, you can run `python3 gui_vrchat_organizer.py`.*
-
-
-#### Linux
-```bash
-python3 gui_vrchat_organizer.py
-```
-
-### Option 3: Standalone AppImage (Linux)
+### Building from Source
 
 ```bash
-chmod +x build_appimage.sh
-./build_appimage.sh
+# Clone the repository
+git clone https://github.com/yourusername/VRChat-Screenshot-Organizer
+cd VRChat-Screenshot-Organizer/rust-rewrite
 
-# Run the AppImage
-./VRChatOrganizer.AppImage
+# Build the desktop CLI
+cargo build -p desktop --release
+
+# Or build the Tauri desktop app
+cargo build -p app --release
+
+# Build the full workspace (all crates)
+cargo build --release
 ```
 
 ## 📖 Usage Guide
@@ -126,43 +115,46 @@ chmod +x build_appimage.sh
 ### Command Line Options
 
 ```
-usage: organize_vrchat.py [-h] [--dry-run] [--watch] [--interval INTERVAL] 
-                          [--single-folder] [--software-filter SOFTWARE_FILTER] 
-                          [path]
+Usage: vrchat-organizer [OPTIONS] [PATH]
 
-Organize VRChat screenshots by world
+Arguments:
+  [PATH]  Path to VRChat pictures directory or specific folder
+          [default: ~/Pictures/VRChat/VRChat]
 
-positional arguments:
-  path                  Path to VRChat pictures directory or specific folder
-
-optional arguments:
-  -h, --help           Show this help message and exit
-  --dry-run            Show what would be done without making changes
-  --watch              Keep monitoring the folder and organize automatically
-  --interval INTERVAL  Watch interval in seconds (default: 5)
-  --single-folder      Treat path as a single folder to organize (not as a root with YYYY-MM folders)
-  --scan-all-months    Scan all month folders instead of just the latest one
-  --template TEMPLATE  Custom subfolder naming template (e.g., "{world}", "{year}-{month}/{world}").
-                       Available variables: {world}, {year}, {month}, {day}, {width}, {height}
+Options:
+  -d, --dry-run            Show what would be done without making changes
+  -s, --scan-all-months    Scan all month folders instead of just the latest one
+  -f, --single-folder      Treat path as a single folder to organize
+                           (not as a root with YYYY-MM folders)
+  -t, --template <TEMPLATE>  Custom subfolder naming template
+                           [default: {world}]
+                           Variables: {world}, {year}, {month}, {day}, {width}, {height}
+  -h, --help               Print help
+  -V, --version            Print version
 ```
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `VRCHAT_DRY_RUN` | Set to any value to enable dry-run mode |
+| `VRCHAT_SCAN_ALL_MONTHS` | Set to any value to scan all month folders |
+| `VRCHAT_SINGLE_FOLDER` | Set to any value to treat path as a single folder |
 
 ### Examples
 
 ```bash
-# Dry run - see what would happen
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --dry-run
+# Dry run — see what would happen
+./vrchat-organizer ~/Pictures/VRChat/VRChat --dry-run
 
 # Organize a specific folder
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --single-folder
+./vrchat-organizer ~/Pictures/VRChat/VRChat --single-folder
 
 # Scan all historical month folders
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --scan-all-months
+./vrchat-organizer ~/Pictures/VRChat/VRChat --scan-all-months
 
-# Watch mode with custom interval
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --watch --interval 60
-
-# Organize into "YYYY-MM/World Name (WidthxHeight)" folders using a template
-python3 organize_vrchat.py ~/Pictures/VRChat/VRChat --template "{year}-{month}/{world} ({width}x{height})"
+# Organize into "{year}-{month}/World Name (WidthxHeight)" folders
+./vrchat-organizer ~/Pictures/VRChat/VRChat --template "{year}-{month}/{world} ({width}x{height})"
 ```
 
 ### Folder Structure
@@ -171,12 +163,11 @@ Before organizing:
 ```
 VRChat/
 ├── 2025-01/
-│   ├── screenshot_1.png
-│   ├── screenshot_2.png
-│   ├── screenshot_3.png
+│   ├── VRChat_2025-01-12_12-34-56.xyz_1920x1080.png
+│   ├── VRChat_2025-01-12_13-00-00.xyz_1920x1080.png
+│   ├── VRChat_2025-01-13_10-00-00.xyz_2048x1440.png
 │   └── ...
 ├── 2025-02/
-│   ├── screenshot_1.png
 │   └── ...
 ```
 
@@ -185,51 +176,13 @@ After organizing:
 VRChat/
 ├── 2025-01/
 │   ├── Black Cat/
-│   │   ├── screenshot_1.png
-│   │   └── screenshot_2.png
-│   ├── Home Sweet Home/
-│   │   └── screenshot_3.png
+│   │   ├── VRChat_2025-01-12_12-34-56.xyz_1920x1080.png
+│   │   └── VRChat_2025-01-12_13-00-00.xyz_1920x1080.png
 │   ├── Prints/
-│   │   └── print_2048x1440.png
+│   │   └── VRChat_2025-01-13_10-00-00.xyz_2048x1440.png
 │   └── ...
 ├── 2025-02/
 │   └── ...
-```
-
-## 🔧 Scripts
-
-### `organize_vrchat.py`
-Main organization script. Can run in normal mode, dry-run mode, or watch mode.
-
-### `preview_vrchat.py`
-Preview what will be organized without making any changes.
-
-### `gui_vrchat_organizer.py`
-Graphical user interface for easier use without command-line knowledge.
-
-### `debug_metadata.py`
-Utility script to inspect EXIF metadata in image files for troubleshooting.
-
-### `build_appimage.sh`
-Build script to create a standalone Linux AppImage executable.
-
-## 📁 Project Structure
-
-```
-VRChat-Organizer/
-├── src/                          # Source code directory
-│   ├── organize_vrchat.py        # Main organizer class
-│   ├── gui_vrchat_organizer.py   # GUI interface
-│   ├── preview_vrchat.py         # Preview tool
-│   └── debug_metadata.py         # Metadata debugging
-├── scripts/                       # Build and utility scripts
-│   └── build_appimage.sh         # AppImage builder
-├── docs/                          # Documentation
-├── icons/                         # Application icons
-├── requirements.txt               # Python dependencies
-├── LICENSE                        # MIT License
-├── CONTRIBUTING.md                # Contribution guidelines
-└── README.md                      # This file
 ```
 
 ## 🐛 Troubleshooting
@@ -239,32 +192,32 @@ VRChat-Organizer/
 - **Solution 1**: Ensure VRCX is installed from [github.com/vrcx-team/VRCX](https://github.com/vrcx-team/VRCX)
 - **Solution 2**: Open VRCX Settings → Enable "Screenshot Metadata" checkbox
 - **Solution 3**: Make sure VRCX is running in the background while taking screenshots
-- **Solution 4**: Use `debug_metadata.py` on a recent screenshot to verify metadata is being embedded
-
-### ⚠️ Watch Mode Not Working
-**Symptom**: Watch mode doesn't organize new screenshots
-- Verify VRCX is running in the background
-- Verify "Screenshot Metadata" is enabled in VRCX Settings
-- Try increasing the interval: `--watch --interval 60`
-- Check file permissions on the VRChat pictures folder
 
 ### "No world metadata found"
 - Verify VRCX is running and Screenshot Metadata is enabled (see above)
 - Some old screenshots may not have VRCX metadata embedded
 - These images will remain in the month folder root
-- Use `debug_metadata.py` to inspect specific images and confirm metadata presence
-
-### Import errors
-- Dependencies are automatically installed on first run
-- If issues persist, manually install: `pip3 install Pillow`
 
 ### Permission denied errors
 - Ensure you have read/write permissions on the VRChat pictures directory
-- Try running with appropriate permissions
+- Make the AppImage executable: `chmod +x VRChatOrganizer-x86_64.AppImage`
 
-### GUI not appearing
-- Ensure tkinter is installed: `sudo apt install python3-tk` (Ubuntu/Debian)
-- Or `brew install python-tk` (macOS)
+## 📁 Project Structure
+
+```
+VRChat-Screenshot-Organizer/
+├── rust-rewrite/                 # Rust workspace (main codebase)
+│   ├── Cargo.toml                # Workspace manifest
+│   ├── crates/
+│   │   ├── organizer-core/       # Core library: metadata extraction + file organization
+│   │   └── desktop/              # CLI binary entrypoint
+│   ├── src-tauri/                # Tauri desktop app shell
+│   └── README.md                 # Rust-specific build instructions
+├── docs/                         # Documentation
+├── icons/                        # Application icons
+├── README.md                     # This file
+└── LICENSE                       # MIT License
+```
 
 ## 🤝 Contributing
 
@@ -279,17 +232,19 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 This tool modifies your file system by moving your screenshot files. **Use at your own risk!**
 
 **Critical Safety Steps:**
-- ✅ **Always run `--dry-run` first** - See what would happen before any changes
-- ✅ **Always backup before running** - Keep copies of your important screenshots
-- ✅ **Review `--dry-run` output carefully** - Make sure you agree with what it will do
-- ✅ **Only run if you're comfortable** - Don't proceed if you have doubts
+- ✅ **Always run `--dry-run` first** — See what would happen before any changes
+- ✅ **Always backup before running** — Keep copies of your important screenshots
+- ✅ **Review `--dry-run` output carefully** — Make sure you agree with what it will do
+- ✅ **Only run if you're comfortable** — Don't proceed if you have doubts
 
 **The author assumes NO responsibility for data loss or damage.** This is provided as-is. While the tool is designed to be safe and careful, **you use it at your own risk.** If you don't wish to proceed after reviewing the `--dry-run` output, simply do not run the command without the `--dry-run` flag
 
 ## 🙏 Acknowledgments
 
-- [Pillow](https://python-pillow.org/) - Python Imaging Library
-- [VRCX](https://github.com/vrcx-team/VRCX) - VRChat Companion
+- [image-rs](https://github.com/image-rs/image) — Rust Imaging Library
+- [kamadak-exif](https://github.com/kamadak/exif-rs) — Rust EXIF Reader
+- [VRCX](https://github.com/vrcx-team/VRCX) — VRChat Companion
+- [Tauri](https://tauri.app/) — Desktop Application Framework
 - VRChat Community
 
 ## 📞 Support

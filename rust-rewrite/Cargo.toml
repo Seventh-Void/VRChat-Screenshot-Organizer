@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/organizer-core", "crates/desktop", "src-tauri"]
+resolver = "2"
