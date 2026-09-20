@@ -10,6 +10,14 @@ cd "$SCRIPT_DIR"
 
 echo "=== Building VRChat Organizer AppImage ==="
 command -v cargo >/dev/null || { echo "cargo is required" >&2; exit 1; }
+command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
+
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+[ -n "$VERSION" ] || { echo "Unable to determine application version" >&2; exit 1; }
+RELEASE_DIR="$SCRIPT_DIR/../release/v${VERSION}"
+mkdir -p "$RELEASE_DIR"
+rm -f "$RELEASE_DIR"/VRChatOrganizer-"$VERSION"-x86_64.AppImage \
+  "$RELEASE_DIR"/SHA256SUMS
 
 # Step 1: Build the Tauri app in release mode
 echo ">>> Building Tauri app (release)..."
@@ -48,7 +56,6 @@ ln -sf "usr/bin/vrchat-organizer" "$APPDIR/AppRun"
 ln -sf "usr/share/applications/com.vrchat.organizer.desktop" "$APPDIR/com.vrchat.organizer.desktop"
 ln -sf "usr/share/icons/hicolor/256x256/apps/vrchat-organizer.png" "$APPDIR/vrchat-organizer.png"
 
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
 APPIMAGE_NAME="VRChatOrganizer-${VERSION}-x86_64.AppImage"
 echo ">>> Building AppImage as: ${APPIMAGE_NAME}..."
 
@@ -63,8 +70,9 @@ elif [ -f /usr/bin/appimagetool ]; then
 fi
 
 if [ -n "$APPIMAGETOOL" ]; then
-  $APPIMAGETOOL "$APPDIR" "${SCRIPT_DIR}/target/${APPIMAGE_NAME}"
-  echo "✅ AppImage created at: ./target/${APPIMAGE_NAME}"
+  "$APPIMAGETOOL" "$APPDIR" "${RELEASE_DIR}/${APPIMAGE_NAME}"
+  sha256sum "${RELEASE_DIR}/${APPIMAGE_NAME}" > "${RELEASE_DIR}/SHA256SUMS"
+  echo "✅ AppImage created at: ${RELEASE_DIR}/${APPIMAGE_NAME}"
 else
   echo "appimagetool is required to create a release AppImage." >&2
   exit 1
@@ -74,4 +82,4 @@ echo "=== Build complete ==="
 echo ""
 echo "Tauri GUI app:    ./target/release/app"
 echo "CLI tool:         ./target/release/desktop"
-echo "AppImage:         ./target/${APPIMAGE_NAME}"
+echo "AppImage:         ${RELEASE_DIR}/${APPIMAGE_NAME}"

@@ -10,6 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== Building VRChat Organizer for Windows ==="
+command -v cargo >/dev/null || { echo "cargo is required" >&2; exit 1; }
+command -v rustup >/dev/null || { echo "rustup is required" >&2; exit 1; }
+
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+[ -n "$VERSION" ] || { echo "Unable to determine application version" >&2; exit 1; }
+RELEASE_DIR="$SCRIPT_DIR/../release/v${VERSION}"
+mkdir -p "$RELEASE_DIR"
+WINDOWS_BINARY="${RELEASE_DIR}/VRChatOrganizer-${VERSION}-windows-x86_64.exe"
 
 # Check if we have the Windows target
 if rustup target list --installed | grep -q "x86_64-pc-windows-gnu"; then
@@ -20,9 +28,12 @@ if rustup target list --installed | grep -q "x86_64-pc-windows-gnu"; then
   
   # Build the desktop CLI binary for Windows
   cargo build --release -p desktop --target x86_64-pc-windows-gnu
-  
+  cp ./target/x86_64-pc-windows-gnu/release/desktop.exe "$WINDOWS_BINARY"
+  find "$RELEASE_DIR" -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.msi' \) \
+    -print0 | sort -z | xargs -0 sha256sum > "$RELEASE_DIR/SHA256SUMS"
+
   echo "✅ Windows binaries built!"
-  echo "   CLI: ./target/x86_64-pc-windows-gnu/release/desktop.exe"
+  echo "   CLI: ${WINDOWS_BINARY}"
 else
   echo ""
   echo "⚠️  Windows cross-compilation target not available."
@@ -40,4 +51,5 @@ else
   echo "     cargo tauri build --bundles nsis,msi"
   echo ""
   echo "See BUILDING_WINDOWS.md for detailed instructions."
+  exit 1
 fi

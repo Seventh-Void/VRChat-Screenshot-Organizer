@@ -41,7 +41,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./rust-rewrite/target/VRChatOrganizer-*.AppImage
+          file: ./release/v2.0.0/VRChatOrganizer-*.AppImage
           tag: ${{ github.ref }}
           file_glob: true
           overwrite: true
@@ -59,15 +59,15 @@ jobs:
       - name: Install mingw-w64 cross-compiler
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
-      - name: Build CLI binary for Windows
-        run: cargo build --release -p desktop --target x86_64-pc-windows-gnu
+      - name: Build Windows executable
+        run: ./build-windows.sh
         working-directory: ./rust-rewrite
 
       - name: Upload Windows EXE to Release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./rust-rewrite/target/x86_64-pc-windows-gnu/release/desktop.exe
+          file: ./release/v2.0.0/VRChatOrganizer-*-windows-x86_64.exe
           tag: ${{ github.ref }}
           overwrite: true
 
@@ -87,14 +87,18 @@ jobs:
         shell: pwsh
         run: |
           cargo tauri build --bundles nsis,msi
-          Copy-Item target/release/app.exe target/release/vrchat-organizer-2.0.0-portable.exe
+          $releaseDir = "../release/v2.0.0"
+          New-Item -ItemType Directory -Force $releaseDir | Out-Null
+          Copy-Item target/release/app.exe "$releaseDir/VRChatOrganizer-2.0.0-windows-x86_64-portable.exe"
+          Copy-Item target/release/bundle/nsis/*.exe $releaseDir
+          Copy-Item target/release/bundle/msi/*.msi $releaseDir
         working-directory: ./rust-rewrite
 
       - name: Upload portable Windows executable
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./rust-rewrite/target/release/vrchat-organizer-*-portable.exe
+          file: ./release/v2.0.0/VRChatOrganizer-*-portable.exe
           tag: ${{ github.ref }}
           overwrite: true
 
@@ -102,7 +106,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./rust-rewrite/target/release/bundle/**/*.exe
+          file: ./release/v2.0.0/*.exe
           tag: ${{ github.ref }}
           file_glob: true
           overwrite: true
@@ -111,7 +115,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./rust-rewrite/target/release/bundle/**/*.msi
+          file: ./release/v2.0.0/*.msi
           tag: ${{ github.ref }}
           file_glob: true
           overwrite: true

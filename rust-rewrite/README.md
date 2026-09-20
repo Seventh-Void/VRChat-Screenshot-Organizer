@@ -102,8 +102,18 @@ cd rust-rewrite
 ```
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
-AppStream metadata and icon, and writes the result to `rust-rewrite/target/`.
+AppStream metadata and icon, and writes the versioned result to
+`release/v2.0.0/` (with the version read from Cargo metadata).
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
+
+The Windows cross-compilation helper uses the same versioned release directory:
+
+```bash
+./build-windows.sh
+```
+
+It produces `release/v2.0.0/VRChatOrganizer-2.0.0-windows-x86_64.exe` and
+updates `SHA256SUMS` for all generated release binaries.
 
 For a local development cycle:
 

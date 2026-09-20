@@ -36,7 +36,9 @@ cd rust-rewrite
 cargo build --release -p desktop --target x86_64-pc-windows-gnu
 ```
 
-The output will be at `rust-rewrite/target/x86_64-pc-windows-gnu/release/desktop.exe` — a standalone Windows executable you can upload as a release artifact.
+The helper copies the standalone executable to
+`release/v2.0.0/VRChatOrganizer-2.0.0-windows-x86_64.exe`, ready to upload as a
+release artifact.
 
 > ⚠️ **Limitation:** The Tauri GUI app (`-p app`) cannot be cross-compiled from Linux because it requires native Windows WebView2. For the full GUI app on Windows, build natively on Windows (Option 1) or use GitHub Actions.
 
