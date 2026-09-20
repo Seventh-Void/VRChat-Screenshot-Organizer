@@ -11,11 +11,16 @@ control tied to the VRChat process.
 - **Separate metadata sources** — Explicit image tags are kept separate from
   world participant metadata. People search and tagged-photo counts use only
   the people manually identified in images.
-- **Persistent PNG metadata** — Tags are stored in an Organizer-owned PNG
-  metadata chunk without re-encoding image pixels.
+- **Persistent separate tag store** — Tags are stored in
+  `.vrchat-organizer-tags.json` beside the screenshot library, keyed by a
+  normalized PNG content fingerprint. Rescans and cache rebuilds never delete
+  tags, and organizer moves do not break them.
 - **Subtle library refreshes** — Background refreshes keep existing content
   visible and use a short opacity transition instead of an abrupt loading
   replacement.
+- **Fitted enlarged viewer** — The fixed viewer stage centres every image and
+  fits it without cropping or scrolling. The tag overlay stays anchored to the
+  fitted image, including after navigation and window resize.
 - **Detailed organization notifications** — Organization toasts identify the
   photo and destination folder, and remain visible for 10 seconds.
 - **VRChat session auto-watch** — Watch mode starts when VRChat opens and stops
@@ -29,8 +34,8 @@ control tied to the VRChat process.
 
 | File | Platform | SHA-256 |
 |---|---|---|
-| `VRChatOrganizer-2.1.0-x86_64.AppImage` | Linux x86_64 GUI | `aedc5a3431a59a79e09706e9aa296e10dab2594ab90246b761c8f920e0d273aa` |
-| `VRChatOrganizer-2.1.0-windows-x86_64.exe` | Windows x86_64 CLI | `89e3a4bed862b15d9742746a6f6bd6023a6ad004eaa8000f3f200ed1192b4989` |
+| `VRChatOrganizer-2.1.0-x86_64.AppImage` | Linux x86_64 GUI | `9e51dece12bc7318f3fb20e7f73cbc0173966aa06239415f090fd1bd62dda088` |
+| `VRChatOrganizer-2.1.0-windows-x86_64.exe` | Windows x86_64 CLI | `15fae9e09867fafe9888ea1c36c65c6a12e97eb0068fd3e28c46fb88db74edc4` |
 
 The Windows executable in this release directory is the standalone CLI build.
 The full Tauri GUI executable and NSIS/MSI installers require a native Windows
@@ -38,7 +43,8 @@ or Windows CI build because they use the Windows WebView2 toolchain.
 
 ## Verification
 
-- `organizer-core` tests: 33 passed, 0 failed.
+- `organizer-core` tests: 39 passed, 0 failed.
+- Frontend tagging state tests: 8 assertions passed, 0 failed.
 - Tauri application release build completed successfully.
 - Windows x86_64 CLI release build completed successfully.
 - AppImage packaging completed successfully.

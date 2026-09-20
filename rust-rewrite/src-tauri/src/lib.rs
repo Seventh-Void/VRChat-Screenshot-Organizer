@@ -1,9 +1,9 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use organizer_core::{
-    cached_library, clear_cancel_request, generate_thumbnail, organize_path, organize_single_file,
-    read_activity_log, request_cancel, scan_library_with_cache, tag_png_participant,
-    undo_organization,
-    validate_template, ActivityEntry, OrganizerConfig, OrganizerStats,
+    cached_library, clear_cancel_request, extract_image_meta, generate_thumbnail, organize_path,
+    organize_single_file, read_activity_log, request_cancel, scan_library_with_cache,
+    set_photo_tags, tag_photo_participant_in_store, undo_organization, validate_template,
+    ActivityEntry, OrganizerConfig, OrganizerStats,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -181,10 +181,32 @@ async fn tag_photo_participant(
         if !photo_path.starts_with(&base_path) || !photo_path.is_file() {
             return Err("photo is outside the selected screenshot folder".to_string());
         }
-        tag_png_participant(&photo_path, &participant).map_err(|error| error.to_string())
+
+        tag_photo_participant_in_store(&base_path, &photo_path, &participant)
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| format!("tagging task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn set_photo_participant_tags(
+    folder_path: String,
+    photo_path: String,
+    participants: Vec<String>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base_path = std::fs::canonicalize(shellexpand::tilde(&folder_path).to_string())
+            .map_err(|error| format!("screenshot folder is not accessible: {error}"))?;
+        let photo_path = std::fs::canonicalize(shellexpand::tilde(&photo_path).to_string())
+            .map_err(|error| format!("photo is not accessible: {error}"))?;
+        if !photo_path.starts_with(&base_path) || !photo_path.is_file() {
+            return Err("photo is outside the selected screenshot folder".to_string());
+        }
+        set_photo_tags(&base_path, &photo_path, &participants).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("tag editing task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -449,6 +471,21 @@ fn wait_for_stable_file(path: &Path) -> Option<(u64, std::time::SystemTime)> {
     None
 }
 
+fn wait_for_capture_metadata(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let fingerprint = wait_for_stable_file(path)?;
+        match extract_image_meta(path) {
+            Ok(meta) if meta.world_name.is_some() || (meta.width, meta.height) == (2048, 1440) => {
+                return Some(fingerprint);
+            }
+            Ok(_) if Instant::now() >= deadline => return Some(fingerprint),
+            Err(_) if Instant::now() >= deadline => return Some(fingerprint),
+            Ok(_) | Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
 /// Start watching the folder for new files and auto-organize them.
 /// Filesystem notifications are batched briefly because a single capture is
 /// commonly reported as several create/modify events while it is written.
@@ -573,7 +610,7 @@ async fn start_watching(
                         // Wait for the capture writer to finish. A create event
                         // can arrive before the file is complete, and a move
                         // event can refer to a path that no longer exists.
-                        let Some(fingerprint) = wait_for_stable_file(&path) else {
+                        let Some(fingerprint) = wait_for_capture_metadata(&path) else {
                             continue;
                         };
                         if processed.get(&path) == Some(&fingerprint) {
@@ -650,6 +687,7 @@ pub fn run() {
             get_library,
             get_thumbnail,
             tag_photo_participant,
+            set_photo_participant_tags,
             get_default_path,
             open_photo_location,
             copy_photo_path,

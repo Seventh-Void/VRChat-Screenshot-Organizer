@@ -291,14 +291,18 @@
     [hidden], .photo-error[hidden] { display:none !important; }
     @keyframes skeleton { to { background-position:-200% 0; } }
     @keyframes detail-in { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
-    .lightbox { position:fixed; inset:0; z-index:20; display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:24px; align-items:stretch; padding:58px 34px 28px; background:rgba(14,13,20,.97); animation:lightbox-in .2s ease both; }
+    .lightbox { position:fixed; inset:0; z-index:20; display:grid; grid-template-columns:minmax(0,1fr) 320px; grid-template-rows:minmax(0,1fr); gap:24px; align-items:stretch; min-width:0; min-height:0; width:100%; height:100%; padding:58px 34px 28px; overflow:hidden; background:rgba(14,13,20,.97); animation:lightbox-in .2s ease both; }
     .lightbox[hidden] { display:none; }
-    .lightbox img { max-width:100%; max-height:100%; object-fit:contain; border-radius:8px; }
-    .lightbox-media { position:relative; min-width:0; min-height:0; display:grid; place-items:center; padding:18px 58px; }
-    .lightbox-panel { min-width:0; border-left:1px solid var(--line); padding:12px 0 0 24px; }
+    .lightbox-media { position:relative; min-width:0; min-height:0; display:grid; place-items:center; overflow:hidden; padding:18px 58px; }
+    .lightbox-image-wrap { position:relative; display:grid; place-items:center; min-width:0; min-height:0; width:100%; height:100%; }
+    .lightbox img { display:block; width:auto; height:auto; max-width:100%; max-height:100%; object-fit:contain; border-radius:8px; }
+    .lightbox-tag-overlay { position:absolute; left:10px; bottom:10px; max-width:calc(100% - 20px); padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:rgba(14,13,20,.82); color:var(--ink); font-size:12px; opacity:0; transform:translateY(4px); transition:.16s ease; pointer-events:none; }
+    .lightbox-image-wrap:hover .lightbox-tag-overlay, .lightbox-image-wrap:focus-within .lightbox-tag-overlay { opacity:1; transform:none; }
+    .lightbox-panel { min-width:0; min-height:0; overflow:auto; border-left:1px solid var(--line); padding:12px 0 0 24px; }
     .lightbox-panel h2 { margin:7px 0 5px; font-size:20px; overflow-wrap:anywhere; }
     .lightbox-panel p { color:var(--muted); margin:0 0 16px; }
     .lightbox-players { display:flex; flex-wrap:wrap; gap:5px; margin:9px 0 20px; }
+    .lightbox-players .photo-person { cursor:pointer; }
     .photo-person { color:var(--ink); background:var(--accent-soft); border:1px solid var(--line); border-radius:5px; padding:4px 7px; font-size:10px; }
     .lightbox-tag-hint { color:var(--faint); font-size:11px; line-height:1.4; margin:0 0 16px; }
     .tag-menu { position:fixed; z-index:40; width:min(290px,calc(100vw - 24px)); padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:0 18px 50px rgba(0,0,0,.45); }
@@ -449,8 +453,8 @@
       </div>
     </main>
   </div>
-  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media"><img id="lightboxImage" alt=""><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Tagged people</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="photo-meta-row"><span>World metadata</span><strong id="lightboxWorldPlayerCount"></strong></div><div class="lightbox-players" id="lightboxWorldPlayers"></div><p class="lightbox-tag-hint">World metadata may list everyone present. Right-click the image to save only the people you can identify in this specific frame.</p><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside></div>
-  <div class="tag-menu" id="tagMenu" hidden role="dialog" aria-label="Tag a person"><strong>Tag a person in this image</strong><input id="tagPersonSearch" type="search" maxlength="80" autocomplete="off" placeholder="Search player name" aria-label="Search player name"><div class="tag-suggestions" id="tagSuggestions" role="listbox"></div><div class="tag-menu-actions"><button class="btn" id="cancelTag" type="button">Cancel</button><button class="btn primary" id="saveTag" type="button">Save tag</button></div></div>
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media" id="lightboxMedia"><div class="lightbox-image-wrap" id="lightboxImageWrap"><img id="lightboxImage" alt=""><div class="lightbox-tag-overlay" id="lightboxTagOverlay"></div><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Tagged people</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><button class="text-btn" id="editPhotoTags" type="button">Edit tags</button><div class="photo-meta-row"><span>World metadata</span><strong id="lightboxWorldPlayerCount"></strong></div><div class="lightbox-players" id="lightboxWorldPlayers"></div><p class="lightbox-tag-hint">World metadata may list everyone present. Right-click the image to save only the people you can identify in this specific frame.</p><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside></div>
+  <div class="tag-menu" id="tagMenu" hidden role="dialog" aria-label="Tag a person"><strong>Tag a person in this image</strong><div class="tag-selected" id="tagSelected" aria-live="polite"></div><input id="tagPersonSearch" type="search" maxlength="80" autocomplete="off" placeholder="Search player name" aria-label="Search player name"><div class="tag-suggestions" id="tagSuggestions" role="listbox"></div><div class="tag-menu-actions"><button class="btn" id="cancelTag" type="button">Cancel</button><button class="btn primary" id="saveTag" type="button">Save tag</button></div></div>
   <div class="onboarding" id="onboarding" hidden>
     <div class="onboarding-panel" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
       <div class="onboarding-top"><div class="eyebrow">Getting started</div><span class="onboarding-step" id="onboardingStep">Step 1 of 3</span></div>
@@ -515,13 +519,14 @@
       </div>
     </div>
   </div>
+  <script src="tagging-state.js"></script>
   <script>
     const invoke = window.__TAURI__?.core?.invoke || (async (cmd, args) => {
       if (cmd === 'get_default_path') return '~/Pictures/VRChat/VRChat';
       if (cmd === 'validate_folder') return args?.folderPath || '~/Pictures/VRChat/VRChat';
       if (cmd === 'is_watching') return false;
       if (cmd === 'get_vrchat_status') return { vrcxRunning: false, vrchatRunning: false, vrchatStartedAt: null };
-      if (cmd === 'organize_folder' || cmd === 'cancel_scan' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'get_library' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run' || cmd === 'open_photo_location' || cmd === 'copy_photo_path' || cmd === 'add_photos_to_collection' || cmd === 'tag_photo_participant') return Promise.reject('This action requires the desktop app');
+      if (cmd === 'organize_folder' || cmd === 'cancel_scan' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'get_library' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run' || cmd === 'open_photo_location' || cmd === 'copy_photo_path' || cmd === 'add_photos_to_collection' || cmd === 'tag_photo_participant' || cmd === 'set_photo_participant_tags') return Promise.reject('This action requires the desktop app');
       return {};
     });
     const listen = window.__TAURI__?.event?.listen || (async () => () => {});
@@ -534,6 +539,8 @@
     let scanInFlight = false;
     const photoImages = [];
     let viewerState = null;
+    let tagDialogState = null;
+    let tagUndoState = null;
     let watching = false, currentFilter = 'all', resolutionFilter = 'all', libraryTab = 'worlds';
     let vrchatWatcherSyncInFlight = null;
     const $ = (s) => document.querySelector(s);
@@ -925,24 +932,16 @@
       return unorganizedPhotos.map(photo => ({ ...photo, worldName: photoWorldName(photo) }));
     }
     function rebuildPeopleIndex() {
-      peopleIndex = new Map();
-      knownPeopleIndex = new Map();
-      allLibraryPhotos().forEach(photo => {
-        const tagged = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants : [];
-        const metadata = Array.isArray(photo.participants) ? photo.participants : [];
-        [...metadata, ...tagged].forEach(person => {
-          const name = String(person).trim();
-          if (!name) return;
-          const key = name.toLowerCase();
-          if (!knownPeopleIndex.has(key)) knownPeopleIndex.set(key, { name, photos: [] });
-        });
-        tagged.forEach(person => {
-          const name = String(person).trim();
-          if (!name) return;
-          const key = name.toLowerCase();
-          if (!peopleIndex.has(key)) peopleIndex.set(key, { name, photos: [] });
-          peopleIndex.get(key).photos.push(photo);
-        });
+      const indexes = VRChatTagging.buildPeopleIndex(allLibraryPhotos());
+      peopleIndex = indexes.tagged;
+      knownPeopleIndex = indexes.known;
+    }
+    function updatePhotoTagInLibrary(path, taggedParticipants) {
+      images.forEach(world => world.photos.forEach(photo => {
+        if (photo.path === path) photo.taggedParticipants = taggedParticipants;
+      }));
+      unorganizedPhotos.forEach(photo => {
+        if (photo.path === path) photo.taggedParticipants = taggedParticipants;
       });
     }
     function setLibraryTab(tab) {
@@ -1162,7 +1161,7 @@
       const names = [...knownPeopleIndex.values()].sort((a, b) => a.name.localeCompare(b.name));
       const matches = names.filter(person => person.name.toLowerCase().startsWith(query));
       const suggestions = (matches.length ? matches : names.filter(person => person.name.toLowerCase().includes(query))).slice(0, 10);
-      $('#peopleSuggestions').innerHTML = suggestions.map(person => `<button class="people-suggestion" type="button" data-person-suggestion="${escapeHtml(person.name)}">${escapeHtml(person.name)}</button>`).join('');
+      $('#peopleSuggestions').innerHTML = suggestions.map(person => `<button class="people-suggestion" type="button" data-person-suggestion="${escapeHtml(person.name)}">${escapeHtml(person.name)} <small>${escapeHtml([...person.sources].join(' · '))}</small></button>`).join('');
     }
     function renderPeoplePerson(person) {
       if (!person) {
@@ -1363,6 +1362,12 @@
       if (!viewerState) return;
       const photo = viewerState.photos[viewerState.index];
       const url = assetUrl(photo.path);
+      const imageWrap = $('#lightboxImageWrap');
+      imageWrap.style.transform = 'none';
+      imageWrap.style.translate = 'none';
+      imageWrap.style.scale = 'none';
+      imageWrap.style.width = '100%';
+      imageWrap.style.height = '100%';
       const worldName = photo.worldName || viewerState.world.name || 'Unknown world';
       $('#lightboxCounter').textContent = `${viewerState.index + 1} / ${viewerState.photos.length}`;
       $('#lightboxWorld').textContent = worldName;
@@ -1371,7 +1376,8 @@
       const players = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants : [];
       const worldPlayers = Array.isArray(photo.participants) ? photo.participants : [];
       $('#lightboxPlayerCount').textContent = players.length ? String(players.length) : 'No player data';
-      $('#lightboxPlayers').innerHTML = players.length ? players.map(player => `<span class="photo-person">${escapeHtml(player)}</span>`).join('') : '<span class="photo-meta-empty">No player data</span>';
+      $('#lightboxPlayers').innerHTML = players.length ? players.map(player => `<span class="photo-person">${escapeHtml(player)} <button type="button" class="tag-remove" data-remove-tag="${escapeHtml(player)}" aria-label="Remove ${escapeHtml(player)}">×</button></span>`).join('') : '<span class="photo-meta-empty">No player data</span>';
+      $('#lightboxTagOverlay').textContent = VRChatTagging.tagSummary(players);
       $('#lightboxWorldPlayerCount').textContent = worldPlayers.length ? String(worldPlayers.length) : 'No metadata';
       $('#lightboxWorldPlayers').innerHTML = worldPlayers.length ? worldPlayers.map(player => `<span class="photo-person">${escapeHtml(player)}</span>`).join('') : '<span class="photo-meta-empty">No world participant metadata</span>';
       $('#lightboxError').hidden = true;
@@ -1379,19 +1385,41 @@
       $('#lightboxImage').alt = `${worldName} screenshot`;
       $('#lightboxImage').src = '';
       $('#lightboxImage').src = url;
-      $('#lightboxImage').onload = null;
+      $('#lightboxImage').onload = () => {
+        fitViewerImage();
+      };
       $('#lightboxImage').onerror = () => { $('#lightboxImage').hidden = true; $('#lightboxError').hidden = false; };
       if (viewerState.photos[viewerState.index - 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index - 1].path);
       if (viewerState.photos[viewerState.index + 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index + 1].path);
     }
+    function fitViewerImage() {
+      const stage = $('#lightboxMedia');
+      const image = $('#lightboxImage');
+      const wrapper = $('#lightboxImageWrap');
+      if (!stage || !image.naturalWidth || !image.naturalHeight) return;
+      const availableWidth = Math.max(1, stage.clientWidth - 116);
+      const availableHeight = Math.max(1, stage.clientHeight - 36);
+      const scale = Math.min(availableWidth / image.naturalWidth, availableHeight / image.naturalHeight, 1);
+      wrapper.style.width = `${Math.max(1, Math.round(image.naturalWidth * scale))}px`;
+      wrapper.style.height = `${Math.max(1, Math.round(image.naturalHeight * scale))}px`;
+    }
     function renderTagSuggestions() {
       const query = ($('#tagPersonSearch').value || '').trim().toLowerCase();
-      const names = [...knownPeopleIndex.values()].map(person => person.name).sort((a, b) => a.localeCompare(b));
+      const photo = viewerState?.photos?.[viewerState.index];
+      const names = [...new Map(
+        (Array.isArray(photo?.participants) ? photo.participants : [])
+          .map(name => String(name).trim())
+          .filter(Boolean)
+          .map(name => [name.toLowerCase(), name])
+      ).values()].sort((a, b) => a.localeCompare(b));
       const matches = (query ? names.filter(name => name.toLowerCase().includes(query)) : names).slice(0, 8);
-      $('#tagSuggestions').innerHTML = matches.map(name => `<button class="tag-suggestion" type="button" role="option" data-tag-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('');
+      tagDialogState = tagDialogState || VRChatTagging.createTagDialogController(names);
+      $('#tagSuggestions').innerHTML = matches.map((name, index) => `<button class="tag-suggestion${index === tagDialogState.highlighted ? ' active' : ''}" type="button" role="option" data-tag-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('');
+      $('#tagSelected').innerHTML = tagDialogState.selected.map(name => `<span class="tag-chip">${escapeHtml(name)}<button type="button" data-remove-tag="${escapeHtml(name)}" aria-label="Remove ${escapeHtml(name)}">×</button></span>`).join('');
     }
     function closeTagMenu() {
       $('#tagMenu').hidden = true;
+      tagDialogState = null;
     }
     function openTagMenu(event) {
       if (!viewerState) return;
@@ -1403,39 +1431,88 @@
       menu.style.left = `${Math.max(12, left)}px`;
       menu.style.top = `${Math.max(12, top)}px`;
       $('#tagPersonSearch').value = '';
+      tagDialogState = VRChatTagging.createTagDialogController(
+        [...new Set((viewerState.photos[viewerState.index].participants || []).map(name => String(name).trim()).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b))
+      );
       renderTagSuggestions();
       $('#tagPersonSearch').focus();
     }
     async function savePhotoTag() {
       if (!viewerState) return;
-      const participant = ($('#tagPersonSearch').value || '').trim();
-      if (!participant) {
-        $('#tagPersonSearch').focus();
+      const typed = ($('#tagPersonSearch').value || '').trim();
+      const names = tagDialogState ? tagDialogState.selected : [];
+      if (typed && !names.some(name => VRChatTagging.normalizeName(name) === VRChatTagging.normalizeName(typed))) {
+        const exact = (viewerState.photos[viewerState.index].participants || []).find(name => VRChatTagging.normalizeName(name) === VRChatTagging.normalizeName(typed));
+        if (exact) names.push(exact);
+      }
+      if (!names.length) {
+        toast('Select at least one person to tag');
         return;
       }
       const photo = viewerState.photos[viewerState.index];
       $('#saveTag').disabled = true;
       try {
-        const taggedParticipants = await invoke('tag_photo_participant', {
+        const previous = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants.slice() : [];
+        const taggedParticipants = await invoke('set_photo_participant_tags', {
           folderPath: $('#folderPath').textContent,
           photoPath: photo.path,
-          participant
+          participants: names
         });
-        photo.taggedParticipants = taggedParticipants;
+        VRChatTagging.applyTags(photo, taggedParticipants);
+        updatePhotoTagInLibrary(photo.path, taggedParticipants);
+        tagUndoState = { path: photo.path, previous };
         closeTagMenu();
         renderViewerPhoto();
-        toast(`Tagged ${participant}`);
-        await refreshLibrary();
-        const refreshedPhoto = allLibraryPhotos().find(item => item.path === photo.path);
-        if (refreshedPhoto && viewerState) {
-          viewerState.photos[viewerState.index] = refreshedPhoto;
-          renderViewerPhoto();
-        }
+        toast('Tags saved · Undo available with Ctrl+Z');
+        rebuildPeopleIndex();
+        renderWorlds();
+        renderTimeline();
+        renderStorage();
       } catch (error) {
         toast(`Could not save tag: ${String(error)}`);
       } finally {
         $('#saveTag').disabled = false;
       }
+    }
+    async function editPhotoTags() {
+      if (!viewerState) return;
+      const photo = viewerState.photos[viewerState.index];
+      const current = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants.join(', ') : '';
+      const value = window.prompt('Edit tagged people (comma separated). Leave blank to remove all tags.', current);
+      if (value === null) return;
+      const names = value.split(',').map(name => name.trim()).filter(Boolean);
+      try {
+        const tags = await invoke('set_photo_participant_tags', { folderPath: $('#folderPath').textContent, photoPath: photo.path, participants: names });
+        tagUndoState = { path: photo.path, previous: Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants.slice() : [] };
+        VRChatTagging.applyTags(photo, tags);
+        updatePhotoTagInLibrary(photo.path, tags);
+        rebuildPeopleIndex();
+        renderViewerPhoto();
+        renderWorlds();
+        renderTimeline();
+        renderStorage();
+        toast(tags.length ? 'Tags updated' : 'Tags removed');
+      } catch (error) {
+        toast(`Could not update tags: ${String(error)}`);
+      }
+    }
+    async function undoTagChange() {
+      if (!tagUndoState || !viewerState) return false;
+      const photo = viewerState.photos.find(item => item.path === tagUndoState.path);
+      if (!photo) return false;
+      const current = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants.slice() : [];
+      const tags = await invoke('set_photo_participant_tags', { folderPath: $('#folderPath').textContent, photoPath: photo.path, participants: tagUndoState.previous });
+      VRChatTagging.applyTags(photo, tags);
+      updatePhotoTagInLibrary(photo.path, tags);
+      tagUndoState = { path: photo.path, previous: current };
+      rebuildPeopleIndex();
+      renderViewerPhoto();
+      renderWorlds();
+      renderTimeline();
+      renderStorage();
+      toast('Tag change undone');
+      return true;
     }
     function openViewer(world, index) { closeTagMenu(); viewerState = { world, photos: world.photos, index }; $('#lightbox').hidden = false; renderViewerPhoto(); }
     function closeViewer() { closeTagMenu(); $('#lightbox').hidden = true; viewerState = null; }
@@ -1459,21 +1536,78 @@
     $('#copyPhotoPath').addEventListener('click', async () => { if (!viewerState) return; try { await invoke('copy_photo_path', { path: viewerState.photos[viewerState.index].path }); toast('Copied'); } catch (error) { toast(`Could not copy path: ${String(error)}`); } });
     $('#lightboxImage').addEventListener('contextmenu', openTagMenu);
     $('#tagPersonSearch').addEventListener('input', renderTagSuggestions);
-    $('#tagSuggestions').addEventListener('click', event => {
+    function selectTagSuggestion(event) {
+      event.preventDefault();
+      event.stopPropagation();
       const suggestion = event.target.closest('[data-tag-name]');
       if (!suggestion) return;
-      $('#tagPersonSearch').value = suggestion.dataset.tagName;
-      $('#tagSuggestions').innerHTML = '';
+      tagDialogState.select(suggestion.dataset.tagName);
+      $('#tagPersonSearch').value = '';
+      renderTagSuggestions();
       $('#tagPersonSearch').focus();
+    }
+    $('#tagSuggestions').addEventListener('pointerdown', selectTagSuggestion);
+    $('#tagSuggestions').addEventListener('mousedown', selectTagSuggestion);
+    $('#tagSuggestions').addEventListener('click', event => event.stopPropagation());
+    $('#tagSelected').addEventListener('pointerdown', event => {
+      const remove = event.target.closest('[data-remove-tag]');
+      if (!remove) return;
+      event.preventDefault();
+      event.stopPropagation();
+      tagDialogState.remove(remove.dataset.removeTag);
+      renderTagSuggestions();
+    });
+    $('#lightboxPlayers').addEventListener('click', async event => {
+      const remove = event.target.closest('[data-remove-tag]');
+      if (!remove || !viewerState) return;
+      const photo = viewerState.photos[viewerState.index];
+      const previous = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants.slice() : [];
+      const tags = previous.filter(name => VRChatTagging.normalizeName(name) !== VRChatTagging.normalizeName(remove.dataset.removeTag));
+      try {
+        const next = await invoke('set_photo_participant_tags', { folderPath: $('#folderPath').textContent, photoPath: photo.path, participants: tags });
+        tagUndoState = { path: photo.path, previous };
+        VRChatTagging.applyTags(photo, next);
+        updatePhotoTagInLibrary(photo.path, next);
+        renderViewerPhoto();
+        rebuildPeopleIndex();
+        toast('Tag removed · Undo available with Ctrl+Z');
+      } catch (error) {
+        toast(`Could not remove tag: ${String(error)}`);
+      }
     });
     $('#saveTag').addEventListener('click', savePhotoTag);
+    $('#editPhotoTags').addEventListener('click', editPhotoTags);
     $('#cancelTag').addEventListener('click', closeTagMenu);
     document.addEventListener('click', event => {
-      if (!$('#tagMenu').hidden && !event.target.closest('#tagMenu') && event.target !== $('#lightboxImage')) closeTagMenu();
+      const menu = $('#tagMenu');
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (!menu.hidden && !path.includes(menu) && event.target !== $('#lightboxImage')) {
+        closeTagMenu();
+      }
     });
-    $('#tagPersonSearch').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); savePhotoTag(); } });
+    $('#tagPersonSearch').addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        tagDialogState.move(event.key === 'ArrowDown' ? 1 : -1);
+        renderTagSuggestions();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (tagDialogState.acceptHighlighted().length) {
+          $('#tagPersonSearch').value = '';
+          renderTagSuggestions();
+        } else savePhotoTag();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeTagMenu();
+      }
+    });
     $('#lightbox').addEventListener('click', event => { if (event.target.id === 'lightbox') closeViewer(); });
-    document.addEventListener('keydown', event => { if (!viewerState) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape' && !$('#tagMenu').hidden) { closeTagMenu(); return; } if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
+    window.addEventListener('resize', () => {
+      if (!viewerState || $('#lightbox').hidden) return;
+      fitViewerImage();
+      $('#lightboxImageWrap').style.transform = 'none';
+    });
+    document.addEventListener('keydown', async event => { if (!viewerState) return; if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && tagUndoState) { event.preventDefault(); await undoTagChange(); return; } if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape' && !$('#tagMenu').hidden) { closeTagMenu(); return; } if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
     function setWatching(next) { watching = next; $('#watchPulse').classList.toggle('live', watching); $('#watchLabel').textContent = watching ? 'Watcher is live' : 'Watcher paused'; $('#watchCopy').textContent = watching ? 'New captures will be organized automatically.' : 'New screenshots are waiting for you.'; $('#watchToggle').textContent = watching ? 'Pause watching →' : 'Start watching →'; $('#watchMain').textContent = watching ? 'Watching now' : 'Start watching'; $('#automationToggle').textContent = watching ? 'Pause watching' : 'Start watching'; $('#automationStatus').textContent = watching ? 'Watcher is active.' : 'Watcher is paused.'; $('#watchSwitch').classList.toggle('on', watching); }
     document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { selectNavigation(btn.dataset.view); const view = btn.dataset.view; if (view !== 'people') resetPeopleSearch(); document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; if (view === 'timeline') renderTimeline(); if (view === 'collections') renderCollections(); if (view === 'storage') renderStorage(); if (view === 'activity') refreshActivity(); }));
     let searchRenderTimer;

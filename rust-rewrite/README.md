@@ -29,9 +29,30 @@ Metadata (world name, software) is extracted **without any external dependencies
 When a screenshot is open in the viewer, right-click the image to search for a
 player and save an explicit in-frame tag. World metadata participants remain
 available as general capture metadata, while the People view and tagged count
-use only these explicit image tags. Tags are embedded in PNG metadata without
-re-encoding the image. JPEG and WebP screenshots can still be viewed, but
-embedded participant tagging currently supports PNG screenshots only.
+use only these explicit image tags. Tags are stored separately in
+`.vrchat-organizer-tags.json` in the selected screenshot folder, keyed by a
+normalized PNG content hash. This means tags survive app restarts, cache
+rebuilds, rescans, and organizer moves without modifying the screenshot.
+Existing embedded Organizer tags are migrated during a scan. JPEG and WebP
+screenshots can still be viewed, but participant tagging currently supports
+PNG screenshots only.
+
+The tag dialog keeps selected people separate from the search field. Suggestions
+are selected on pointer-down without blurring the dialog, remain open for
+multi-select, and save as one set. The details panel and enlarged-photo overlay
+consume the same in-memory tag state immediately after saving.
+
+The enlarged viewer uses a fixed stage beside the details panel. Images are
+fitted and centred inside that stage, including portrait, ultra-wide, tiny, and
+very large captures; the tag overlay is positioned inside the fitted image
+wrapper. Resizing the window refits the current image without carrying over
+zoom or pan state.
+
+The same normalized image content intentionally shares one tag set (duplicate
+copies represent the same screenshot). If a PNG is edited and re-saved, its
+fingerprint changes and the edited image starts with no tags. The SQLite cache
+stores the fingerprint alongside each photo's path, size, and modification
+time, so unchanged files do not need to be fingerprinted again.
 
 ## Library classification
 
@@ -58,7 +79,8 @@ The desktop Library stores one SQLite row per photo in the application data
 directory (`library.sqlite`). Startup uses unchanged rows immediately and
 rescans only new or changed files in the background. PNG metadata reads only
 the signature, chunk headers, and text chunks before `IDAT`; pixel decoding is
-reserved for generating a cached 320px JPEG thumbnail.
+reserved for generating a cached 320px JPEG thumbnail. Rebuilding this cache
+never deletes or overwrites the separate tag store.
 
 ## Build & Run
 

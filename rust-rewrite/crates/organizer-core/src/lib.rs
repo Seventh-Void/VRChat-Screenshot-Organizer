@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -19,6 +20,7 @@ use walkdir::WalkDir;
 struct CachedPhoto {
     size_bytes: u64,
     modified_secs: u64,
+    fingerprint: Option<String>,
     photo: LibraryPhoto,
 }
 
@@ -188,12 +190,123 @@ pub struct LibraryWorld {
     pub last_capture: Option<u64>,
 }
 
-fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
+const TAG_STORE_FILE: &str = ".vrchat-organizer-tags.json";
+
+fn tag_store_path(base_path: &Path) -> PathBuf {
+    base_path.join(TAG_STORE_FILE)
+}
+
+fn normalized_png_fingerprint(path: &Path) -> Result<String> {
+    let data = fs::read(path)?;
+    if data.len() < 8 || data[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
+        anyhow::bail!("person tagging currently supports PNG screenshots only");
+    }
+    let mut normalized = data[..8].to_vec();
+    let mut offset = 8;
+    while offset + 12 <= data.len() {
+        let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let end = offset
+            .checked_add(12 + length)
+            .ok_or_else(|| anyhow::anyhow!("malformed PNG"))?;
+        if end > data.len() {
+            anyhow::bail!("malformed PNG: chunk exceeds file size");
+        }
+        let chunk_type = &data[offset + 4..offset + 8];
+        let is_organizer_tag = chunk_type == b"tEXt"
+            && data[offset + 8..offset + 8 + length]
+                .starts_with(b"VRChat Organizer Participants\0");
+        if !is_organizer_tag {
+            normalized.extend_from_slice(&data[offset..end]);
+        }
+        offset = end;
+        if chunk_type == b"IEND" {
+            break;
+        }
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(normalized);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn load_tag_store(base_path: &Path) -> Result<HashMap<String, Vec<String>>> {
+    let path = tag_store_path(base_path);
     if !path.exists() {
         return Ok(HashMap::new());
     }
+    match serde_json::from_str(&fs::read_to_string(&path)?) {
+        Ok(store) => Ok(store),
+        Err(error) => {
+            let backup = path.with_extension(format!("json.corrupt.{}", std::process::id()));
+            fs::rename(&path, &backup).with_context(|| {
+                format!(
+                    "tag store is corrupt ({error}) and could not be backed up to {}",
+                    backup.display()
+                )
+            })?;
+            eprintln!(
+                "tag store is corrupt; preserved original at {}",
+                backup.display()
+            );
+            Ok(HashMap::new())
+        }
+    }
+}
 
-    let connection = Connection::open(path)?;
+fn save_tag_store(base_path: &Path, store: &HashMap<String, Vec<String>>) -> Result<()> {
+    let path = tag_store_path(base_path);
+    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    fs::write(&temporary, serde_json::to_vec_pretty(store)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+pub fn set_photo_tags(
+    base_path: &Path,
+    path: &Path,
+    participants: &[String],
+) -> Result<Vec<String>> {
+    let key = normalized_png_fingerprint(path)?;
+    let mut store = load_tag_store(base_path)?;
+    let mut names = Vec::new();
+    for participant in participants {
+        let name = participant.trim();
+        if name.is_empty() || name.chars().count() > 80 {
+            anyhow::bail!("participant name must be 1-80 characters");
+        }
+        if !names
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(name))
+        {
+            names.push(name.to_owned());
+        }
+    }
+    if names.is_empty() {
+        store.remove(&key);
+    } else {
+        store.insert(key, names.clone());
+    }
+    save_tag_store(base_path, &store)?;
+    Ok(names)
+}
+
+pub fn tag_photo_participant_in_store(
+    base_path: &Path,
+    path: &Path,
+    participant: &str,
+) -> Result<Vec<String>> {
+    let key = normalized_png_fingerprint(path)?;
+    let mut store = load_tag_store(base_path)?;
+    let mut names = store.remove(&key).unwrap_or_default();
+    if !names
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(participant.trim()))
+    {
+        names.push(participant.trim().to_owned());
+    }
+    set_photo_tags(base_path, path, &names)
+}
+
+fn ensure_cache_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS photos (
             path TEXT PRIMARY KEY,
@@ -203,42 +316,58 @@ fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
             captured_at INTEGER,
             participants TEXT NOT NULL,
             tagged_participants TEXT NOT NULL DEFAULT '[]',
+            fingerprint TEXT,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
             thumbnail_path TEXT NOT NULL
-        );
-        ALTER TABLE photos ADD COLUMN tagged_participants TEXT NOT NULL DEFAULT '[]';",
-    ).or_else(|error| {
-        if error.to_string().contains("duplicate column name") {
-            Ok(())
-        } else {
-            Err(error)
+        );",
+    )?;
+    for statement in [
+        "ALTER TABLE photos ADD COLUMN tagged_participants TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE photos ADD COLUMN fingerprint TEXT",
+    ] {
+        if let Err(error) = connection.execute_batch(statement) {
+            if !error.to_string().contains("duplicate column name") {
+                return Err(error.into());
+            }
         }
-    })?;
+    }
+    Ok(())
+}
+
+fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let connection = Connection::open(path)?;
+    ensure_cache_schema(&connection)?;
     let mut statement = connection.prepare(
-        "SELECT path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,width,height,thumbnail_path FROM photos",
+        "SELECT path,size_bytes,modified_secs,fingerprint,world_name,captured_at,participants,tagged_participants,width,height,thumbnail_path FROM photos",
     )?;
     let mut rows = statement.query([])?;
     let mut result = HashMap::new();
     while let Some(row) = rows.next()? {
         let path: String = row.get(0)?;
-        let participants = serde_json::from_str(row.get::<_, String>(5)?.as_str()).unwrap_or_default();
-        let tagged_participants =
+        let participants =
             serde_json::from_str(row.get::<_, String>(6)?.as_str()).unwrap_or_default();
+        let tagged_participants =
+            serde_json::from_str(row.get::<_, String>(7)?.as_str()).unwrap_or_default();
         result.insert(
             path.clone(),
             CachedPhoto {
                 size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
                 modified_secs: row.get::<_, i64>(2)?.max(0) as u64,
+                fingerprint: row.get(3)?,
                 photo: LibraryPhoto {
                     path,
-                    thumbnail_path: row.get(9)?,
-                    captured_at: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
-                    world_name: row.get(3)?,
+                    thumbnail_path: row.get(10)?,
+                    captured_at: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+                    world_name: row.get(4)?,
                     participants,
                     tagged_participants,
-                    width: row.get::<_, i64>(7)?.max(0) as u32,
-                    height: row.get::<_, i64>(8)?.max(0) as u32,
+                    width: row.get::<_, i64>(8)?.max(0) as u32,
+                    height: row.get::<_, i64>(9)?.max(0) as u32,
                     size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
                 },
             },
@@ -322,32 +451,13 @@ fn save_cache(
     path: &Path,
     candidates: &[(Option<String>, LibraryPhoto)],
     files: &[(PathBuf, u64, u64, PathBuf)],
+    fingerprints: &HashMap<String, Option<String>>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut connection = Connection::open(path)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS photos (
-            path TEXT PRIMARY KEY,
-            size_bytes INTEGER NOT NULL,
-            modified_secs INTEGER NOT NULL,
-            world_name TEXT,
-            captured_at INTEGER,
-            participants TEXT NOT NULL,
-            tagged_participants TEXT NOT NULL DEFAULT '[]',
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            thumbnail_path TEXT NOT NULL
-        );
-        ALTER TABLE photos ADD COLUMN tagged_participants TEXT NOT NULL DEFAULT '[]';",
-    ).or_else(|error| {
-        if error.to_string().contains("duplicate column name") {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    })?;
+    ensure_cache_schema(&connection)?;
     let transaction = connection.transaction()?;
     for (_, photo) in candidates {
         let modified_secs = files
@@ -356,9 +466,9 @@ fn save_cache(
             .map(|(_, _, modified, _)| *modified)
             .unwrap_or_default();
         transaction.execute(
-            "INSERT OR REPLACE INTO photos
-             (path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,width,height,thumbnail_path)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT OR REPLACE INTO photos
+                 (path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,fingerprint,width,height,thumbnail_path)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 photo.path,
                 photo.size_bytes as i64,
@@ -367,6 +477,7 @@ fn save_cache(
                 photo.captured_at.map(|value| value as i64),
                 serde_json::to_string(&photo.participants)?,
                 serde_json::to_string(&photo.tagged_participants)?,
+                fingerprints.get(&photo.path).and_then(|value| value.clone()),
                 photo.width as i64,
                 photo.height as i64,
                 photo.thumbnail_path,
@@ -414,8 +525,10 @@ fn scan_library_partition_with_options(
 
     let roots = library_roots(base_path, scan_all_months)?;
     let cached = cache_path.map(load_cache).transpose()?.unwrap_or_default();
+    let tag_store = load_tag_store(base_path)?;
     let mut candidates = Vec::new();
     let mut files = Vec::new();
+    let mut fingerprints = HashMap::new();
 
     for root in roots {
         let walker = if !scan_all_months && root == *base_path {
@@ -446,16 +559,26 @@ fn scan_library_partition_with_options(
         .map(|(path, size_bytes, modified_secs, root)| {
             if let Some(cached) = cached.get(&path.to_string_lossy().into_owned()) {
                 if cached.size_bytes == *size_bytes && cached.modified_secs == *modified_secs {
+                    let mut photo = cached.photo.clone();
+                    let fingerprint = cached
+                        .fingerprint
+                        .clone()
+                        .or_else(|| normalized_png_fingerprint(path).ok());
+                    if let Some(key) = fingerprint.as_ref() {
+                        photo.tagged_participants = tag_store.get(key).cloned().unwrap_or_default();
+                    }
                     return Ok((
                         path.clone(),
                         *size_bytes,
                         *modified_secs,
                         root.clone(),
-                        cached.photo.clone(),
+                        fingerprint,
+                        photo,
                     ));
                 }
             }
             let metadata = extract_image_meta(path).ok();
+            let fingerprint = normalized_png_fingerprint(path).ok();
             let filesystem_captured_at = Some(*modified_secs);
             let captured_at = metadata
                 .as_ref()
@@ -464,7 +587,7 @@ fn scan_library_partition_with_options(
             if cancel_requested() {
                 anyhow::bail!("scan cancelled");
             }
-            let photo = LibraryPhoto {
+            let mut photo = LibraryPhoto {
                 path: path.to_string_lossy().into_owned(),
                 thumbnail_path: String::new(),
                 captured_at,
@@ -484,16 +607,22 @@ fn scan_library_partition_with_options(
                     .unwrap_or_default(),
                 size_bytes: *size_bytes,
             };
+            if let Some(key) = fingerprint.as_ref() {
+                if let Some(tags) = tag_store.get(key) {
+                    photo.tagged_participants = tags.clone();
+                }
+            }
             Ok((
                 path.clone(),
                 *size_bytes,
                 *modified_secs,
                 root.clone(),
+                fingerprint,
                 photo,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
-    for (path, size_bytes, modified_secs, root, mut photo) in processed {
+    for (path, size_bytes, modified_secs, root, fingerprint, mut photo) in processed {
         if photo.thumbnail_path.is_empty() {
             photo.thumbnail_path = thumbnail_path_for(&path, base_path, Some(modified_secs))
                 .to_string_lossy()
@@ -501,14 +630,28 @@ fn scan_library_partition_with_options(
         }
         let relative = path.strip_prefix(&root).unwrap_or(&path);
         let world = classify_world(relative, photo.world_name.as_deref(), scan_all_months, 2);
+        if let Some(key) = fingerprint.as_ref() {
+            fingerprints.insert(photo.path.clone(), Some(key.clone()));
+        }
         candidates.push((world, photo.clone()));
         if let Some(cache_path) = cache_path {
             // Cache writes are batched after classification below.
             let _ = (cache_path, size_bytes, modified_secs);
         }
     }
+    let mut tag_store = load_tag_store(base_path)?;
+    for (_, photo) in &candidates {
+        if !photo.tagged_participants.is_empty() {
+            if let Some(Some(key)) = fingerprints.get(&photo.path) {
+                tag_store
+                    .entry(key.clone())
+                    .or_insert_with(|| photo.tagged_participants.clone());
+            }
+        }
+    }
+    save_tag_store(base_path, &tag_store)?;
     if let Some(cache_path) = cache_path {
-        save_cache(cache_path, &candidates, &files)?;
+        save_cache(cache_path, &candidates, &files, &fingerprints)?;
     }
 
     let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
@@ -1053,7 +1196,8 @@ fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
                 let keyword = String::from_utf8_lossy(&data[..null_pos]).into_owned();
                 let raw_value = &data[null_pos + 1..];
                 let value = match chunk_type {
-                    b"tEXt" => raw_value.iter().map(|&byte| byte as char).collect(),
+                    b"tEXt" => String::from_utf8(raw_value.to_vec())
+                        .unwrap_or_else(|_| raw_value.iter().map(|&byte| byte as char).collect()),
                     b"zTXt" if !raw_value.is_empty() => {
                         let mut value = String::new();
                         let _ = ZlibDecoder::new(&raw_value[1..]).read_to_string(&mut value);
@@ -1147,8 +1291,11 @@ fn extract_png_text_chunks_full(path: &Path) -> Result<Vec<PngTextEntry>> {
 
                 let value = match chunk_type {
                     b"tEXt" => {
-                        // Raw Latin-1 text after keyword
-                        raw_value.iter().map(|&b| b as char).collect::<String>()
+                        // Organizer tags are UTF-8 despite the legacy tEXt
+                        // container; retain Latin-1 fallback for old metadata.
+                        String::from_utf8(raw_value.to_vec()).unwrap_or_else(|_| {
+                            raw_value.iter().map(|&b| b as char).collect::<String>()
+                        })
                     }
                     b"zTXt" => {
                         // Byte after null = compression method (should be 0 for zlib)
@@ -2249,10 +2396,8 @@ mod tests {
 
     #[test]
     fn tags_png_participant_without_reencoding_pixels() {
-        let dir = std::env::temp_dir().join(format!(
-            "vrchat-organizer-test-tag-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vrchat-organizer-test-tag-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("capture.png");
         image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
@@ -2268,6 +2413,236 @@ mod tests {
         assert_eq!(meta.tagged_participants, vec!["Alice".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stored_tags_survive_reload_rescan_move_and_edit() {
+        let dir =
+            std::env::temp_dir().join(format!("vrchat-organizer-tag-store-{}", std::process::id()));
+        let world = dir.join("2026-08").join("The Pool Parlor _ 8 Ball Pool");
+        std::fs::create_dir_all(&world).unwrap();
+        let first = world.join("VRChat_2026-08-30_21-30-00.000_1920x1080.png");
+        let second = world.join("VRChat_2026-08-30_21-31-00.000_1920x1080.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&first)
+            .unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([11, 20, 30, 255]))
+            .save(&second)
+            .unwrap();
+
+        assert_eq!(
+            tag_photo_participant_in_store(&dir, &first, "Ćóâl").unwrap(),
+            vec!["Ćóâl"]
+        );
+        assert_eq!(
+            tag_photo_participant_in_store(&dir, &first, "Floki-AutumnFox").unwrap(),
+            vec!["Ćóâl", "Floki-AutumnFox"]
+        );
+        let cache = dir.join("library.sqlite");
+        let first_scan = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let photo = first_scan
+            .world_details
+            .iter()
+            .flat_map(|world| &world.photos)
+            .find(|photo| photo.path == first.to_string_lossy())
+            .unwrap();
+        assert_eq!(photo.tagged_participants, vec!["Ćóâl", "Floki-AutumnFox"]);
+
+        // A fresh scan represents an app restart and a cache rebuild.
+        let restarted = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        assert_eq!(
+            restarted
+                .world_details
+                .iter()
+                .flat_map(|world| &world.photos)
+                .find(|photo| photo.path == first.to_string_lossy())
+                .unwrap()
+                .tagged_participants,
+            vec!["Ćóâl", "Floki-AutumnFox"]
+        );
+
+        let moved = world.join("moved.png");
+        std::fs::rename(&first, &moved).unwrap();
+        let after_move = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let moved_photo = after_move
+            .world_details
+            .iter()
+            .flat_map(|world| &world.photos)
+            .find(|photo| photo.path == moved.to_string_lossy())
+            .unwrap();
+        assert_eq!(
+            moved_photo.tagged_participants,
+            vec!["Ćóâl", "Floki-AutumnFox"]
+        );
+
+        assert_eq!(
+            set_photo_tags(&dir, &moved, &["Floki-AutumnFox".to_string()]).unwrap(),
+            vec!["Floki-AutumnFox"]
+        );
+        assert_eq!(
+            set_photo_tags(&dir, &moved, &[]).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(scan_library_with_cache(&dir, true, Some(&cache))
+            .unwrap()
+            .world_details
+            .iter()
+            .flat_map(|world| &world.photos)
+            .find(|photo| photo.path == moved.to_string_lossy())
+            .unwrap()
+            .tagged_participants
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_legacy_embedded_tags_and_preserves_them_in_separate_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-tag-migration-{}",
+            std::process::id()
+        ));
+        let world = dir.join("2026-08").join("The Pool Parlor");
+        std::fs::create_dir_all(&world).unwrap();
+        let path = world.join("VRChat_2026-08-30_21-30-00.000_1920x1080.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        tag_png_participant(&path, "Ćóâl").unwrap();
+        let cache = dir.join("library.sqlite");
+        let stats = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let photo = stats
+            .unorganized_photos
+            .iter()
+            .find(|photo| photo.path == path.to_string_lossy())
+            .unwrap();
+        assert_eq!(photo.tagged_participants, vec!["Ćóâl"]);
+        let store = fs::read_to_string(dir.join(TAG_STORE_FILE)).unwrap();
+        assert!(store.contains("Ćóâl"));
+        assert_eq!(load_tag_store(&dir).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_rebuild_keeps_tags_and_records_fingerprint() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-cache-tags-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("VRChat_2026-08-30_21-30-00.000_1920x1080.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        set_photo_tags(&dir, &path, &["Alice".to_string()]).unwrap();
+        let cache = dir.join("library.sqlite");
+        scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let connection = Connection::open(&cache).unwrap();
+        let fingerprint: Option<String> = connection
+            .query_row(
+                "SELECT fingerprint FROM photos WHERE path = ?1",
+                [path.to_string_lossy().as_ref()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(fingerprint.is_some());
+        let rebuilt = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let photo = rebuilt
+            .unorganized_photos
+            .iter()
+            .find(|photo| photo.path == path.to_string_lossy())
+            .unwrap();
+        assert_eq!(photo.tagged_participants, vec!["Alice"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_tag_store_is_backed_up_before_recovery() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-corrupt-tags-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(TAG_STORE_FILE);
+        fs::write(&path, "{not json").unwrap();
+        assert!(load_tag_store(&dir).unwrap().is_empty());
+        let backup = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .find(|path| path.to_string_lossy().contains(".corrupt."));
+        assert!(backup.is_some());
+        save_tag_store(&dir, &HashMap::new()).unwrap();
+        assert!(path.is_file());
+        assert!(!dir
+            .join(format!("{TAG_STORE_FILE}.tmp.{}", std::process::id()))
+            .exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identical_images_share_tags_but_edited_content_gets_new_identity() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-fingerprint-edge-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.png");
+        let second = dir.join("second.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&first)
+            .unwrap();
+        fs::copy(&first, &second).unwrap();
+        set_photo_tags(&dir, &first, &["Alice".to_string()]).unwrap();
+        let identical = scan_library_with_options(&dir, true).unwrap();
+        assert!(identical
+            .unorganized_photos
+            .iter()
+            .all(|photo| photo.tagged_participants == vec!["Alice"]));
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([11, 20, 30, 255]))
+            .save(&first)
+            .unwrap();
+        let edited = scan_library_with_options(&dir, true).unwrap();
+        assert!(edited
+            .unorganized_photos
+            .iter()
+            .find(|photo| photo.path == first.to_string_lossy())
+            .unwrap()
+            .tagged_participants
+            .is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reports_cold_and_cached_scan_timings_for_1001_photos() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-performance-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("fixture.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&fixture)
+            .unwrap();
+        for index in 0..1001 {
+            fs::copy(
+                &fixture,
+                dir.join(format!("VRChat_2026-08-30_{index:04}.png")),
+            )
+            .unwrap();
+        }
+        fs::remove_file(fixture).unwrap();
+        let cache = dir.join("library.sqlite");
+        let cold_start = std::time::Instant::now();
+        scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let cold = cold_start.elapsed();
+        let cached_start = std::time::Instant::now();
+        scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let cached = cached_start.elapsed();
+        println!(
+            "performance fixture: photos=1001 cold_scan={cold:?} existing_cache_scan={cached:?}"
+        );
+        assert!(cache.is_file());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
