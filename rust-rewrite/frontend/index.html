@@ -73,9 +73,19 @@
     .library-head .top-spacer { min-width: 20px; }
     .actions { display: flex; gap: 8px; align-items: center; }
     .btn { border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 9px 13px; cursor: pointer; color: var(--muted); }
+    .btn:disabled { cursor: wait; opacity: .62; }
+    .btn[aria-busy="true"]::after { content: ""; display: inline-block; width: 11px; height: 11px; margin-left: 8px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: scan-spinner .7s linear infinite; }
     .btn:hover { color: var(--ink); background: rgba(171,95,239,.08); }
     .btn.primary { background: var(--accent); border-color: var(--accent); color: #0e0d14; font-weight: 700; }
     .btn.primary:hover { filter: brightness(1.08); }
+    .scan-progress { display: none; flex: 0 0 180px; min-width: 180px; }
+    .scan-progress.active { display: block; }
+    .scan-progress-label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+    .scan-progress-track { height: 3px; overflow: hidden; border-radius: 99px; background: var(--accent-soft); }
+    .scan-progress-bar { width: 42%; height: 100%; border-radius: inherit; background: var(--accent-bright); animation: scan-progress 1.15s ease-in-out infinite; }
+    @keyframes scan-progress { 0% { transform: translateX(-120%); } 100% { transform: translateX(290%); } }
+    @keyframes scan-spinner { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .scan-progress-bar { animation: none; width: 100%; } .btn[aria-busy="true"]::after { animation: none; } }
     .stats-line { display: flex; align-items: center; gap: 22px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 0; margin-bottom: 26px; color: var(--muted); }
     .stat strong { color: var(--ink); font-size: 16px; margin-right: 5px; font-variant-numeric: tabular-nums; }
     .stat span { font-size: 11px; }
@@ -364,7 +374,7 @@
       <header class="topbar"><div class="crumb">VRChat Organizer <span style="color:var(--faint)">/</span> <strong id="crumbTitle">Library</strong></div><div class="top-spacer"></div><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="search" type="search" placeholder="Search worlds"></label><button class="icon-btn" title="Refresh library" id="refresh">↻</button></header>
       <div class="content">
         <section class="view active" id="library">
-          <div class="library-head"><div><div class="eyebrow">World library</div><h1 id="welcomeHeading">Welcome back.</h1><p class="intro" id="welcomeIntro">A visual home for every world you have captured. Your newest memories, organized automatically.</p></div><div class="top-spacer"></div><div class="actions"><button class="btn" id="scan">Scan folder</button><button class="btn" id="scanAll">Scan all <span class="scan-all-note">(may take some time)</span></button><button class="btn primary" id="watchMain">Start watching</button></div></div>
+          <div class="library-head"><div><div class="eyebrow">World library</div><h1 id="welcomeHeading">Welcome back.</h1><p class="intro" id="welcomeIntro">A visual home for every world you have captured. Your newest memories, organized automatically.</p></div><div class="top-spacer"></div><div class="actions"><button class="btn" id="scan">Scan folder</button><button class="btn" id="scanAll">Scan all <span class="scan-all-note">(may take some time)</span></button><button class="btn primary" id="watchMain">Start watching</button><div class="scan-progress" id="scanProgress" role="status" aria-live="polite"><span class="scan-progress-label" id="scanProgressLabel">Scanning screenshots…</span><div class="scan-progress-track"><div class="scan-progress-bar"></div></div></div></div></div>
           <div class="stats-line"><div class="stat"><strong id="photoTotal">0</strong><span>photos</span></div><div class="stat"><strong id="worldTotal">0</strong><span>worlds</span></div><div class="stat"><strong id="lastCapture">—</strong><span>last capture</span></div><div class="top-spacer"></div><span style="font-size:11px;color:var(--faint)">Sorted by recent</span></div>
           <div class="session-status" aria-live="polite"><div class="session-status-item"><i class="session-dot" id="vrcxStatusDot"></i><span>VRCX <strong id="vrcxStatusLabel">Checking…</strong></span></div><div class="session-status-item"><i class="session-dot" id="vrchatStatusDot"></i><span>VRChat <strong id="vrchatStatusLabel">Checking…</strong></span></div><div class="session-status-item"><span id="vrchatDuration">Session time unavailable</span></div></div>
           <div class="library-tools"><div class="filter"><button class="active" data-filter="all">All worlds</button><button data-filter="favorite">Favourites</button><button data-filter="recent">Recently visited</button></div><select class="sort" id="sort" aria-label="Sort worlds"><option value="recent">Recently visited</option><option value="photos">Most photos</option><option value="name">Name</option></select></div>
@@ -629,20 +639,35 @@
       });
       return changeWarningPromise;
     }
+    function setScanUi(active, label = 'Scanning screenshots…') {
+      ['#scan', '#scanAll'].forEach(selector => {
+        const button = $(selector);
+        button.disabled = active;
+        button.setAttribute('aria-busy', String(active));
+      });
+      const progress = $('#scanProgress');
+      progress.classList.toggle('active', active);
+      progress.setAttribute('aria-hidden', String(!active));
+      $('#scanProgressLabel').textContent = label;
+    }
     async function scanFromOnboarding() {
       if (!await confirmFileChanges()) return;
       const button = $('#onboardingScan');
+      setScanUi(true, 'Organizing screenshots…');
       button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
       button.querySelector('strong').textContent = 'Scanning…';
       try {
         const result = await invoke('organize_folder', { folderPath: $('#folderPath').textContent, dryRun: false, scanAllMonths: scanAllMonthsEnabled(), singleFolder: false, template: '{world}' });
         completeOnboarding();
         toast(result?.errors ? `Scan completed with ${result.errors} error(s)` : (result?.organized ? `${result.organized} screenshots organized` : 'Scan complete — your library is ready'));
-        await refreshLibrary();
+        await refreshLibrary(scanAllMonthsEnabled());
       } catch (error) {
         toast(`Scan could not be completed: ${String(error)}`);
       } finally {
+        setScanUi(false);
         button.disabled = false;
+        button.removeAttribute('aria-busy');
         button.querySelector('strong').textContent = 'Scan my screenshots';
       }
     }
@@ -722,12 +747,13 @@
       })) : [];
       updateNavigationCounts();
     }
-    async function refreshLibrary() {
+    async function refreshLibrary(scanAllMonthsOverride) {
       if (libraryRefreshInFlight) return libraryRefreshInFlight;
       const path = $('#folderPath').textContent;
+      const scanAllMonths = scanAllMonthsOverride ?? scanAllMonthsEnabled();
       libraryRefreshInFlight = (async () => {
         try {
-          applyLibrarySnapshot(await invoke('get_library', { folderPath: path, scanAllMonths: scanAllMonthsEnabled() }));
+          applyLibrarySnapshot(await invoke('get_library', { folderPath: path, scanAllMonths }));
           await refreshActivity();
           renderWorlds();
           renderTimeline();
@@ -1030,6 +1056,7 @@
       if (scanInFlight) return;
       if (!await confirmFileChanges()) return;
       scanInFlight = true;
+      setScanUi(true, 'Organizing this folder…');
       button.disabled = true;
       button.textContent = 'Scanning…';
       try {
@@ -1040,6 +1067,7 @@
         toast(`Scan could not be completed: ${String(error)}`);
       } finally {
         scanInFlight = false;
+        setScanUi(false);
         button.disabled = false;
         button.textContent = 'Scan folder';
       }
@@ -1048,21 +1076,46 @@
       const button = $('#scanAll');
       if (scanInFlight || !await confirmFileChanges({ longScan: true })) return;
       scanInFlight = true;
+      setScanUi(true, 'Scanning all month folders…');
       button.disabled = true;
       button.textContent = 'Scanning all…';
       try {
         const result = await invoke('organize_folder',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'});
         if (result?.errors) toast(`Full scan completed with ${result.errors} error(s)`); else if (result?.organized) toast(`${result.organized} screenshots organized`); else toast('Full scan complete');
-        await refreshLibrary();
+        await refreshLibrary(true);
       } catch (error) {
         toast(`Full scan could not be completed: ${String(error)}`);
       } finally {
         scanInFlight = false;
+        setScanUi(false);
         button.disabled = false;
         button.textContent = 'Scan all (may take some time)';
       }
     });
-    $('#simulate').addEventListener('click', async () => { try { const result = await invoke('simulate_folder',{folderPath:$('#folderPath').textContent,scanAllMonths:scanAllMonthsEnabled(),singleFolder:false,template:'{world}'}); const preview = result?.preview || []; $('#previewPanel').textContent = preview.length ? preview.join('\n\n') : 'No changes planned.'; $('#previewPanel').style.display = 'block'; toast(`Preview: ${result?.organized || 0} screenshots would be organized; no files changed`); } catch (error) { toast(`Preview could not be completed: ${String(error)}`); } });
+    $('#simulate').addEventListener('click', async () => {
+      const button = $('#simulate');
+      if (scanInFlight) return;
+      scanInFlight = true;
+      setScanUi(true, 'Preparing preview…');
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = 'Preparing…';
+      try {
+        const result = await invoke('simulate_folder',{folderPath:$('#folderPath').textContent,scanAllMonths:scanAllMonthsEnabled(),singleFolder:false,template:'{world}'});
+        const preview = result?.preview || [];
+        $('#previewPanel').textContent = preview.length ? preview.join('\n\n') : 'No changes planned.';
+        $('#previewPanel').style.display = 'block';
+        toast(`Preview: ${result?.organized || 0} screenshots would be organized; no files changed`);
+      } catch (error) {
+        toast(`Preview could not be completed: ${String(error)}`);
+      } finally {
+        scanInFlight = false;
+        setScanUi(false);
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        button.textContent = 'Preview organization';
+      }
+    });
     $('#undo').addEventListener('click', async () => { if (!await confirmFileChanges()) return; try { const result = await invoke('undo_last_run',{folderPath:$('#folderPath').textContent}); toast(`${result?.undone || 0} files restored`);     await refreshLibrary(); } catch (error) { toast(`Undo could not be completed: ${String(error)}`); } });
     $('#collectionForm').addEventListener('submit', event => {
       event.preventDefault();
