@@ -29,8 +29,11 @@ if rustup target list --installed | grep -q "x86_64-pc-windows-gnu"; then
   # Build the desktop CLI binary for Windows
   cargo build --release -p desktop --target x86_64-pc-windows-gnu
   cp ./target/x86_64-pc-windows-gnu/release/desktop.exe "$WINDOWS_BINARY"
-  find "$RELEASE_DIR" -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.msi' \) \
-    -print0 | sort -z | xargs -0 sha256sum > "$RELEASE_DIR/SHA256SUMS"
+  (
+    cd "$RELEASE_DIR"
+    find . -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.msi' \) \
+      -printf '%f\0' | sort -z | xargs -0 sha256sum
+  ) > "$RELEASE_DIR/SHA256SUMS"
 
   echo "✅ Windows binaries built!"
   echo "   CLI: ${WINDOWS_BINARY}"

@@ -4,16 +4,253 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageMeta {
     pub world_name: Option<String>,
+    pub participants: Vec<String>,
+    pub captured_at: Option<u64>,
     pub width: u32,
     pub height: u32,
     pub software: Option<String>,
+}
+
+/// Return the currently organized screenshots grouped by world folder.
+pub fn scan_library(base_path: &Path) -> Result<OrganizerStats> {
+    scan_library_with_options(base_path, false)
+}
+
+pub fn scan_library_with_options(
+    base_path: &Path,
+    scan_all_months: bool,
+) -> Result<OrganizerStats> {
+    if let Err(error) = log_diagnostic(
+        base_path,
+        "INFO",
+        "library_scan_started",
+        &format!("scan_all_months={scan_all_months}"),
+    ) {
+        eprintln!("diagnostic log unavailable: {error}");
+    }
+    let details = scan_library_details_with_options(base_path, scan_all_months)?;
+    let mut stats = OrganizerStats::default();
+    for world in &details {
+        stats.total += world.photos.len();
+        stats.worlds.insert(world.name.clone(), world.photos.len());
+    }
+    stats.world_details = details;
+    if let Err(error) = log_diagnostic(
+        base_path,
+        "INFO",
+        "library_scan_finished",
+        &format!(
+            "scan_all_months={} worlds={} photos={}",
+            scan_all_months,
+            stats.world_details.len(),
+            stats.total
+        ),
+    ) {
+        eprintln!("diagnostic log unavailable: {error}");
+    }
+    Ok(stats)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPhoto {
+    pub path: String,
+    pub thumbnail_path: String,
+    pub captured_at: Option<u64>,
+    pub world_name: Option<String>,
+    pub participants: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryWorld {
+    pub name: String,
+    pub photos: Vec<LibraryPhoto>,
+    pub last_capture: Option<u64>,
+}
+
+pub fn scan_library_details(base_path: &Path) -> Result<Vec<LibraryWorld>> {
+    scan_library_details_with_options(base_path, false)
+}
+
+pub fn scan_library_details_with_options(
+    base_path: &Path,
+    scan_all_months: bool,
+) -> Result<Vec<LibraryWorld>> {
+    if !base_path.is_dir() {
+        anyhow::bail!("path does not exist: {}", base_path.display());
+    }
+
+    let roots = library_roots(base_path, scan_all_months)?;
+    let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
+
+    for root in roots {
+        for item in WalkDir::new(&root)
+            .into_iter()
+            .filter_map(|item| item.ok())
+            .filter(|item| item.file_type().is_file())
+            .filter(|item| is_image_path(item.path()))
+            .filter(|item| !is_ignored_path(item.path()))
+        {
+            let path = item.path().to_path_buf();
+            let filesystem_captured_at = item
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs());
+            let metadata = extract_image_meta(&path).ok();
+            let relative = path.strip_prefix(&root).unwrap_or(&path);
+            let first_component = relative.components().next().and_then(|component| {
+                let component = component.as_os_str();
+                let is_file = component == path.file_name().unwrap_or_default();
+                (!is_file).then(|| component.to_string_lossy().into_owned())
+            });
+            let world = first_component
+                .filter(|name| name != "Prints" && !name.starts_with('.'))
+                .or_else(|| metadata.as_ref().and_then(|meta| meta.world_name.clone()))
+                .unwrap_or_else(|| "Unsorted".to_string());
+            if world == "Prints" || world.starts_with('.') {
+                continue;
+            }
+            let captured_at = metadata
+                .as_ref()
+                .and_then(|meta| meta.captured_at)
+                .or(filesystem_captured_at);
+            let thumbnail_path = match thumbnail_for(&path, base_path, captured_at) {
+                Ok(path) => path.to_string_lossy().into_owned(),
+                Err(error) => {
+                    eprintln!(
+                        "thumbnail generation failed for {}: {error}",
+                        path.display()
+                    );
+                    String::new()
+                }
+            };
+            worlds.entry(world).or_default().push(LibraryPhoto {
+                path: path.to_string_lossy().into_owned(),
+                thumbnail_path,
+                captured_at,
+                world_name: metadata.as_ref().and_then(|meta| meta.world_name.clone()),
+                participants: metadata
+                    .as_ref()
+                    .map(|meta| meta.participants.clone())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    let mut result: Vec<LibraryWorld> = worlds
+        .into_iter()
+        .map(|(name, mut photos)| {
+            photos.sort_by_key(|photo| std::cmp::Reverse(photo.captured_at.unwrap_or(0)));
+            let last_capture = photos.first().and_then(|photo| photo.captured_at);
+            LibraryWorld {
+                name,
+                photos,
+                last_capture,
+            }
+        })
+        .collect();
+    result.sort_by_key(|world| std::cmp::Reverse(world.last_capture.unwrap_or(0)));
+    Ok(result)
+}
+
+fn library_roots(base_path: &Path, scan_all_months: bool) -> Result<Vec<PathBuf>> {
+    static MONTH_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let month_re = MONTH_RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}$").unwrap());
+    let mut roots = Vec::new();
+    for entry in fs::read_dir(base_path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && month_re.is_match(&entry.file_name().to_string_lossy()) {
+            roots.push(entry.path());
+        }
+    }
+    if roots.is_empty() {
+        roots.push(base_path.to_path_buf());
+    }
+    roots.sort();
+    roots.dedup();
+    if !scan_all_months {
+        if let Some(latest) = roots.pop() {
+            roots.clear();
+            roots.push(latest);
+        }
+    }
+    Ok(roots)
+}
+
+pub fn log_diagnostic(base_path: &Path, level: &str, event: &str, details: &str) -> Result<()> {
+    let path = base_path.join(".vrchat-organizer.log");
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(
+        file,
+        "{} level={} event={} {}",
+        chrono::Utc::now().to_rfc3339(),
+        level,
+        event,
+        details
+    )?;
+    file.flush()?;
+    Ok(())
+}
+
+fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result<PathBuf> {
+    let cache = base_path.join("vrchat-organizer-thumbnails");
+    fs::create_dir_all(&cache)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "thumbnail-v2-320".hash(&mut hasher);
+    path.to_string_lossy().hash(&mut hasher);
+    modified.hash(&mut hasher);
+    let target = cache.join(format!("{:x}.jpg", hasher.finish()));
+    if target
+        .metadata()
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+    {
+        return Ok(target);
+    }
+    {
+        let image = image::ImageReader::open(path)?.decode()?;
+        let thumbnail = image.thumbnail(320, 320);
+        let temporary = target.with_extension("jpg.tmp");
+        let mut output = fs::File::create(&temporary)?;
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 75);
+        encoder.encode_image(&thumbnail)?;
+        output.sync_all()?;
+        fs::rename(temporary, &target)?;
+    }
+    Ok(target)
+}
+
+fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_ignored_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        name == "Prints" || name == "vrchat-organizer-thumbnails" || name.starts_with('.')
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +263,7 @@ pub struct OrganizerConfig {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OrganizerStats {
     pub processed: usize,
     pub organized: usize,
@@ -35,6 +273,8 @@ pub struct OrganizerStats {
     pub undone: usize,
     pub total: usize,
     pub worlds: HashMap<String, usize>,
+    #[serde(default)]
+    pub world_details: Vec<LibraryWorld>,
     pub preview: Vec<String>,
 }
 
@@ -118,11 +358,13 @@ pub fn read_undo_log(base_path: &Path) -> Result<Vec<UndoEntry>> {
 
 /// Undo the last organization run by moving files back to their original paths.
 pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result<()> {
+    let started = std::time::Instant::now();
     let entries = read_undo_log(base_path)?;
     if entries.is_empty() {
         anyhow::bail!("no undo entries found");
     }
 
+    let mut remaining = Vec::new();
     for entry in &entries {
         let dest = PathBuf::from(&entry.destination_path);
         let orig = PathBuf::from(&entry.original_path);
@@ -130,6 +372,7 @@ pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result
         if !dest.exists() {
             // File was already moved or deleted; skip
             stats.errors += 1;
+            remaining.push(entry.clone());
             continue;
         }
 
@@ -138,11 +381,20 @@ pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result
         }
         if orig.exists() {
             stats.errors += 1;
+            remaining.push(entry.clone());
             continue;
         }
         // Use the same cross-volume-safe move helper as organization.
         move_file(&dest, &orig)?;
         stats.undone += 1;
+        if let Some(parent) = dest.parent() {
+            let is_empty = fs::read_dir(parent)
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false);
+            if is_empty {
+                let _ = fs::remove_dir(parent);
+            }
+        }
         println!(
             "undone: moved {} back to {}",
             dest.display(),
@@ -150,9 +402,32 @@ pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result
         );
     }
 
-    // Remove the undo file after successful undo
+    // Keep entries that could not be restored so the user can resolve the
+    // conflict and retry instead of losing the undo history.
     let undo_path = base_path.join(".vrchat-organizer-undo.json");
-    let _ = fs::remove_file(&undo_path);
+    if remaining.is_empty() {
+        let _ = fs::remove_file(&undo_path);
+    } else {
+        let data = serde_json::to_string_pretty(&remaining)?;
+        fs::write(&undo_path, data)?;
+    }
+
+    log_activity(
+        base_path,
+        &ActivityEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            operation: "undo".to_string(),
+            status: if stats.errors == 0 {
+                "success".to_string()
+            } else {
+                "warning".to_string()
+            },
+            duration_ms: started.elapsed().as_millis(),
+            files_affected: stats.undone,
+            details: format!("restored={}, errors={}", stats.undone, stats.errors),
+        },
+    )
+    .context("failed to write activity log")?;
 
     Ok(())
 }
@@ -232,9 +507,40 @@ pub fn sanitize_name(name: &str) -> String {
     let cleaned = cleaned.trim().trim_matches('.').to_string();
     if cleaned.is_empty() {
         "Unnamed World".to_string()
+    } else if is_windows_reserved_name(&cleaned) {
+        format!("{cleaned}_")
     } else {
         cleaned
     }
+}
+
+fn is_windows_reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default();
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 const TEMPLATE_VARIABLES: [&str; 6] = ["world", "width", "height", "year", "month", "day"];
@@ -409,9 +715,10 @@ fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
 }
 
 /// Parse world name and software from a list of PNG text entries.
-fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String>) {
+fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String>, Vec<String>) {
     let mut world_name: Option<String> = None;
     let mut software: Option<String> = None;
+    let mut participants = Vec::new();
 
     for entry in entries {
         match entry.keyword.to_lowercase().as_str() {
@@ -427,6 +734,21 @@ fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String
                     {
                         world_name = Some(sanitize_name(world));
                     }
+                    if let Some(players) =
+                        parsed.get("players").and_then(|players| players.as_array())
+                    {
+                        participants = players
+                            .iter()
+                            .filter_map(|player| {
+                                player
+                                    .get("displayName")
+                                    .and_then(|name| name.as_str())
+                                    .map(str::trim)
+                                    .filter(|name| !name.is_empty())
+                                    .map(ToOwned::to_owned)
+                            })
+                            .collect();
+                    }
                 }
             }
             "software" | "creator tool" | "creator_tool"
@@ -438,7 +760,7 @@ fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String
         }
     }
 
-    (world_name, software)
+    (world_name, software, participants)
 }
 
 // ── JPEG EXIF extraction ──────────────────────────────────────────────────
@@ -448,19 +770,20 @@ fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String
 ///
 /// NOTE: `kamadak-exif`'s `display_value()` wraps string fields in quotes, which would
 /// break JSON parsing. We access the raw ASCII bytes directly instead.
-fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>) {
+fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>, Vec<String>) {
     let file = match fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, Vec::new()),
     };
     let mut reader = std::io::BufReader::new(file);
     let exif = match exif::Reader::new().read_from_container(&mut reader) {
         Ok(e) => e,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, Vec::new()),
     };
 
     let mut world_name: Option<String> = None;
     let mut software: Option<String> = None;
+    let mut participants = Vec::new();
 
     // Tag 270 = ImageDescription — often contains JSON with world info
     if let Some(field) = exif.get_field(exif::Tag::ImageDescription, exif::In::PRIMARY) {
@@ -475,6 +798,21 @@ fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>) {
                             .and_then(|n| n.as_str())
                         {
                             world_name = Some(sanitize_name(world));
+                        }
+                        if let Some(players) =
+                            parsed.get("players").and_then(|players| players.as_array())
+                        {
+                            participants = players
+                                .iter()
+                                .filter_map(|player| {
+                                    player
+                                        .get("displayName")
+                                        .and_then(|name| name.as_str())
+                                        .map(str::trim)
+                                        .filter(|name| !name.is_empty())
+                                        .map(ToOwned::to_owned)
+                                })
+                                .collect();
                         }
                     }
                 }
@@ -496,7 +834,7 @@ fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>) {
         }
     }
 
-    (world_name, software)
+    (world_name, software, participants)
 }
 
 pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
@@ -514,7 +852,7 @@ pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
         .and_then(|s| s.to_str())
         .map(|s| s.to_lowercase());
 
-    let (world_name, software) = match ext.as_deref() {
+    let (world_name, software, participants) = match ext.as_deref() {
         Some("jpg") | Some("jpeg") => {
             // Try EXIF for JPEG files
             extract_exif_meta(path)
@@ -525,15 +863,35 @@ pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
             parse_png_entries(&entries)
         }
         // For WebP and other formats, we can only get dimensions
-        _ => (None, None),
+        _ => (None, None, Vec::new()),
     };
 
     Ok(ImageMeta {
         world_name,
+        participants,
+        captured_at: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(extract_capture_timestamp),
         width,
         height,
         software,
     })
+}
+
+fn extract_capture_timestamp(filename: &str) -> Option<u64> {
+    static CAPTURE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = CAPTURE_RE.get_or_init(|| {
+        Regex::new(r"VRChat_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(?:\.(\d{1,3}))?").unwrap()
+    });
+    let captures = re.captures(filename)?;
+    let date = captures.get(1)?.as_str();
+    let hour = captures.get(2)?.as_str().parse::<u32>().ok()?;
+    let minute = captures.get(3)?.as_str().parse::<u32>().ok()?;
+    let second = captures.get(4)?.as_str().parse::<u32>().ok()?;
+    let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    let datetime = date.and_hms_opt(hour, minute, second)?;
+    datetime.and_utc().timestamp().try_into().ok()
 }
 
 fn determine_month_folder(file_path: &Path, config: &OrganizerConfig) -> PathBuf {
@@ -569,9 +927,24 @@ fn determine_month_folder(file_path: &Path, config: &OrganizerConfig) -> PathBuf
 
 pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Result<()> {
     let started = std::time::Instant::now();
+    if let Err(error) = log_diagnostic(
+        &config.base_path,
+        "INFO",
+        "scan_started",
+        &format!(
+            "dry_run={} scan_all_months={} single_folder={} template={}",
+            config.dry_run, config.scan_all_months, config.single_folder, config.template
+        ),
+    ) {
+        eprintln!("diagnostic log unavailable: {error}");
+    }
     validate_template(&config.template)?;
     if !config.base_path.exists() {
         anyhow::bail!("path does not exist: {}", config.base_path.display());
+    }
+    if !config.dry_run {
+        let undo_path = config.base_path.join(".vrchat-organizer-undo.json");
+        let _ = fs::remove_file(undo_path);
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -599,9 +972,13 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
         if !config.scan_all_months {
             if let Some(last) = candidates.last() {
                 candidates = vec![last.clone()];
-            } else {
-                anyhow::bail!("no month folders found in {}", config.base_path.display());
             }
+        }
+        if candidates.is_empty() {
+            // A picked folder may contain screenshots directly (including a
+            // month folder selected on its own), so scan it when no month
+            // hierarchy exists below the selected path.
+            candidates.push(config.base_path.clone());
         }
     }
 
@@ -633,6 +1010,23 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
         },
     )
     .context("failed to write activity log")?;
+    if let Err(error) = log_diagnostic(
+        &config.base_path,
+        if stats.errors == 0 { "INFO" } else { "WARN" },
+        "scan_finished",
+        &format!(
+            "status={} duration_ms={} processed={} organized={} skipped={} no_metadata={} errors={}",
+            status,
+            started.elapsed().as_millis(),
+            stats.processed,
+            stats.organized,
+            stats.already_organized,
+            stats.no_metadata,
+            stats.errors
+        ),
+    ) {
+        eprintln!("diagnostic log unavailable: {error}");
+    }
     Ok(())
 }
 
@@ -696,6 +1090,7 @@ pub fn organize_single_file(
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     let month_folder = determine_month_folder(file_path, config);
+    println!("found image: {}", file_path.display());
 
     let meta = match extract_image_meta(file_path) {
         Ok(meta) => meta,
@@ -715,6 +1110,7 @@ pub fn organize_single_file(
     };
 
     if let Some(target_sub) = target_sub {
+        println!("detected world: {} ({})", target_sub, file_path.display());
         let destination = unique_destination(
             &month_folder
                 .join(&target_sub)
@@ -729,6 +1125,7 @@ pub fn organize_single_file(
         } else {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
+                println!("ensured folder: {}", parent.display());
             }
 
             // Log undo entry before moving
@@ -759,7 +1156,7 @@ pub fn organize_single_file(
                     destination.display()
                 )
             })?;
-            println!("moved {} -> {}", file_path.display(), target_sub);
+            println!("moved {} -> {}", file_path.display(), destination.display());
         }
         stats.organized += 1;
         // Track per-world photo count (skip "Prints" folder)
@@ -769,6 +1166,7 @@ pub fn organize_single_file(
         }
     } else {
         stats.no_metadata += 1;
+        println!("no world metadata: {}", file_path.display());
         if config.dry_run {
             stats.preview.push(format!(
                 "Would skip:\n{}\n→ Missing image metadata",
@@ -790,17 +1188,8 @@ fn process_folder(
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
-        .filter(|path| {
-            path.extension()
-                .and_then(|s| s.to_str())
-                .map(|extension| {
-                    matches!(
-                        extension.to_ascii_lowercase().as_str(),
-                        "png" | "jpg" | "jpeg" | "webp"
-                    )
-                })
-                .unwrap_or(false)
-        })
+        .filter(|path| is_image_path(path))
+        .filter(|path| !is_ignored_path(path))
         .collect();
     image_files.sort();
 
@@ -808,6 +1197,14 @@ fn process_folder(
         // Delegate to organize_single_file which handles stats, metadata, template resolution, undo
         if let Err(e) = organize_single_file(&image_file, config, stats) {
             eprintln!("error processing {}: {e}", image_file.display());
+            if let Err(log_error) = log_diagnostic(
+                &config.base_path,
+                "ERROR",
+                "file_failed",
+                &format!("path={} error={}", image_file.display(), e),
+            ) {
+                eprintln!("diagnostic log unavailable: {log_error}");
+            }
         }
     }
 
@@ -830,6 +1227,13 @@ mod tests {
     }
 
     #[test]
+    fn sanitizes_windows_reserved_names() {
+        assert_eq!(sanitize_name("CON"), "CON_");
+        assert_eq!(sanitize_name("com1.gallery"), "com1.gallery_");
+        assert_eq!(sanitize_name("LPT9"), "LPT9_");
+    }
+
+    #[test]
     fn extracts_date_from_vrchat_filename() {
         assert_eq!(
             extract_date_from_filename("VRChat_2025-01-12_foo.png"),
@@ -846,6 +1250,8 @@ mod tests {
     fn resolve_template_replaces_all_variables() {
         let meta = ImageMeta {
             world_name: Some("Black Cat".to_string()),
+            participants: Vec::new(),
+            captured_at: None,
             width: 1920,
             height: 1080,
             software: None,
@@ -862,6 +1268,8 @@ mod tests {
     fn resolve_template_handles_missing_world() {
         let meta = ImageMeta {
             world_name: None,
+            participants: Vec::new(),
+            captured_at: None,
             width: 2048,
             height: 1440,
             software: None,
@@ -886,6 +1294,8 @@ mod tests {
     fn sanitizes_template_path_separators() {
         let meta = ImageMeta {
             world_name: Some("World".to_string()),
+            participants: Vec::new(),
+            captured_at: None,
             width: 1920,
             height: 1080,
             software: None,
@@ -951,6 +1361,44 @@ mod tests {
     }
 
     #[test]
+    fn ignores_generated_thumbnail_cache() {
+        assert!(is_ignored_path(Path::new(
+            "/tmp/vrchat/vrchat-organizer-thumbnails/cover.jpg"
+        )));
+        assert!(is_ignored_path(Path::new(
+            "/tmp/vrchat/2025-01/Prints/cover.png"
+        )));
+        assert!(!is_ignored_path(Path::new(
+            "/tmp/vrchat/2025-01/Black Cat/cover.png"
+        )));
+    }
+
+    #[test]
+    fn new_real_run_replaces_previous_undo_history() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-undo-reset-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old_entry = UndoEntry {
+            original_path: dir.join("old.png").display().to_string(),
+            destination_path: dir.join("old-destination.png").display().to_string(),
+        };
+        log_undo_entry(&dir, &old_entry).unwrap();
+        let config = OrganizerConfig {
+            base_path: dir.clone(),
+            dry_run: false,
+            scan_all_months: false,
+            single_folder: true,
+            template: "{world}".to_string(),
+        };
+        let mut stats = OrganizerStats::default();
+        organize_path(&config, &mut stats).unwrap();
+        assert!(read_undo_log(&dir).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn prefers_existing_month_folder_over_filename_date_when_file_is_already_in_a_month_folder() {
         let config = OrganizerConfig {
             base_path: PathBuf::from("/tmp/vrchat"),
@@ -986,11 +1434,14 @@ mod tests {
         png.extend_from_slice(&ihdr_payload);
         png.extend_from_slice(&[0, 0, 0, 0]); // dummy CRC
 
-        // tEXt chunk: "Description\0{\"world\":{\"name\":\"Black Cat\"}}"
-        let text = b"Description\0{\"world\":{\"name\":\"Black Cat\"}}";
+        // tEXt chunk with world and participant metadata.
+        let mut text = b"Description\0".to_vec();
+        text.extend_from_slice(
+            br#"{"world":{"name":"Black Cat"},"players":[{"displayName":"Alice"},{"displayName":"Bob"}]}"#,
+        );
         png.extend_from_slice(&(text.len() as u32).to_be_bytes());
         png.extend_from_slice(b"tEXt");
-        png.extend_from_slice(text);
+        png.extend_from_slice(&text);
         png.extend_from_slice(&[0, 0, 0, 0]); // dummy CRC
 
         // IEND chunk
@@ -1007,8 +1458,9 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].keyword, "Description");
 
-        let (world, _software) = parse_png_entries(&entries);
+        let (world, _software, participants) = parse_png_entries(&entries);
         assert_eq!(world.as_deref(), Some("Black Cat"));
+        assert_eq!(participants, vec!["Alice".to_string(), "Bob".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1048,6 +1500,47 @@ mod tests {
         assert!(!src.exists());
         assert!(dst.exists());
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "hello");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn library_scan_includes_images_at_selected_folder_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-library-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("VRChat_2025-01-12_foo.png");
+        image::RgbImage::new(1, 1).save(&image_path).unwrap();
+
+        let worlds = scan_library_details(&dir).unwrap();
+
+        assert_eq!(worlds.len(), 1);
+        assert_eq!(worlds[0].name, "Unsorted");
+        assert_eq!(worlds[0].photos.len(), 1);
+        assert_eq!(worlds[0].photos[0].path, image_path.to_string_lossy());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn library_scan_caches_thumbnails_for_special_character_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-special-path-{}",
+            std::process::id()
+        ));
+        let world_dir = dir.join("A [strange] 世界");
+        std::fs::create_dir_all(&world_dir).unwrap();
+        let image_path = world_dir.join("capture with spaces [1].png");
+        image::RgbImage::new(16, 9).save(&image_path).unwrap();
+
+        let worlds = scan_library_details_with_options(&dir, true).unwrap();
+        let photo = &worlds[0].photos[0];
+
+        assert_eq!(worlds[0].name, "A [strange] 世界");
+        assert_eq!(photo.path, image_path.to_string_lossy());
+        assert!(Path::new(&photo.thumbnail_path).is_file());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

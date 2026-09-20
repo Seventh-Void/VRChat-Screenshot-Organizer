@@ -90,17 +90,18 @@
     .filter button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 4px 9px; border-radius: 5px; font-size: 12px; }
     .filter button.active, .filter button:hover { color: var(--ink); background: rgba(171,95,239,.12); }
     .sort { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 12px; outline: none; }
-    .world-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 18px; }
+    .world-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 18px; contain: layout paint; }
     .world { min-width: 0; cursor: pointer; }
+    .world:hover .world-title { color: var(--accent-bright); }
     .cover { aspect-ratio: 1.23; overflow: hidden; border-radius: 9px; position: relative; background: #2f2c47; border: 1px solid rgba(171,95,239,.2); }
-    .cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s cubic-bezier(.2,.7,.2,1), filter .4s; }
-    .world:hover .cover img { transform: scale(1.045); filter: saturate(1.12); }
+    .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .image-fallback { width:100%; height:100%; display:grid; place-items:center; padding:12px; color:var(--muted); font-size:11px; text-align:center; background:linear-gradient(135deg,#2f2c47,#211f35); }
     .cover::after { content: ""; position: absolute; inset: 45% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.62)); pointer-events: none; }
     .cover-meta { position: absolute; z-index: 1; left: 12px; bottom: 10px; right: 10px; display: flex; justify-content: space-between; color: #fff; font-size: 11px; }
     .favorite { position: absolute; z-index: 2; top: 9px; right: 9px; border: 0; background: rgba(14,13,20,.72); backdrop-filter: blur(8px); width: 27px; height: 27px; border-radius: 50%; cursor: pointer; color: #fff; }
     .favorite.on { color: var(--accent); }
     .world-info { padding: 10px 2px 0; display: flex; justify-content: space-between; gap: 9px; }
-    .world-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .world-title { font-weight: 650; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
     .world-place { color: var(--faint); font-size: 11px; margin-top: 3px; }
     .world-count { color: var(--muted); font-size: 11px; white-space: nowrap; padding-top: 2px; }
     .section-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 17px; }
@@ -113,6 +114,8 @@
     .photo-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
     .photo { aspect-ratio: 1.22; border-radius: 6px; overflow: hidden; background: #2f2c47; }
     .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .photo-row .photo-tile { aspect-ratio: 1.22; }
+    .photo-timeline-meta { position:absolute; left:0; right:0; bottom:0; padding:18px 8px 7px; color:#fff; text-align:left; font-size:10px; background:linear-gradient(transparent,rgba(0,0,0,.8)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .collection-layout { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
     .collection-feature { min-height: 270px; border:1px solid var(--line); border-radius: 10px; display:grid; place-items:center; padding:24px; text-align:center; }
     .collection-feature-copy h2 { font: 650 31px/1.15 var(--ui); margin: 0; }
@@ -123,24 +126,72 @@
     .collection-row strong { font-size: 12px; }
     .collection-row small { display:block; color:var(--faint); margin-top:2px; }
     .collection-row span { margin-left:auto; color:var(--muted); font-size:11px; }
+    .collection-tools { display:flex; gap:8px; align-items:center; margin:0 0 22px; }
+    .collection-tools input { min-width:0; width:min(280px, 100%); border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink); outline:none; padding:9px 11px; }
+    .collection-tools input:focus { border-color:rgba(171,95,239,.72); }
+    .collection-custom { border-top:1px solid var(--line); margin-top:24px; padding-top:18px; }
+    .collection-custom-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    .collection-custom-head strong { font-size:13px; }
+    .collection-custom-head button { margin-left:auto; }
+    .collection-custom-worlds { color:var(--muted); font-size:11px; }
+    .collection-photo-count { color:var(--faint); font-size:11px; margin-left:8px; }
+    .scan-all-note { color:var(--muted); font-size:11px; }
+    .collection-picker { position:fixed; inset:0; z-index:25; display:grid; place-items:center; padding:24px; background:rgba(14,13,20,.82); backdrop-filter:blur(12px); }
+    .collection-picker[hidden] { display:none; }
+    .collection-picker-panel { width:min(100%, 760px); max-height:min(760px, 90vh); display:flex; flex-direction:column; padding:28px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:0 24px 70px rgba(0,0,0,.48); }
+    .collection-picker-head { display:flex; align-items:start; gap:15px; }
+    .collection-picker-head h2 { margin:0; font:650 26px/1.15 var(--ui); }
+    .collection-picker-head p { color:var(--muted); margin:7px 0 0; }
+    .collection-picker-close { margin-left:auto; flex:0 0 auto; }
+    .collection-photo-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(145px, 1fr)); gap:12px; overflow:auto; margin:22px 0; padding:2px; }
+    .collection-photo-option { position:relative; display:block; min-width:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--surface-2); cursor:pointer; }
+    .collection-photo-option:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+    .collection-photo-option input { position:absolute; z-index:1; top:8px; left:8px; width:18px; height:18px; accent-color:var(--accent); }
+    .collection-photo-option img { display:block; width:100%; aspect-ratio:1.2; object-fit:cover; }
+    .collection-photo-option span { display:block; overflow:hidden; padding:7px 8px; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+    .collection-picker-actions { display:flex; justify-content:flex-end; gap:9px; }
     .activity-layout { display:grid; grid-template-columns: 1.3fr .7fr; gap:55px; max-width: 1050px; }
     .activity-list { border-top:1px solid var(--line); }
-    .activity-item { display:grid; grid-template-columns: 28px 1fr auto; gap:12px; align-items:center; border-bottom:1px solid var(--line); padding:15px 0; }
-    .activity-dot { width:24px; height:24px; border-radius:50%; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); font-size:11px; }
-    .activity-item strong { font-size:12px; font-weight:600; }
-    .activity-item small { display:block; color:var(--faint); margin-top:2px; }
-    .activity-item time { color:var(--faint); font-size:11px; }
+    .activity-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px; }
+    .activity-toolbar p { color:var(--muted); margin:0; font-size:12px; }
+    .activity-toolbar .btn { white-space:nowrap; }
+    .activity-summary { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:28px; }
+    .activity-stat { border:1px solid var(--line); border-radius:9px; padding:14px; background:rgba(33,32,39,.5); }
+    .activity-stat strong { display:block; color:var(--ink); font-size:22px; font-variant-numeric:tabular-nums; }
+    .activity-stat span { color:var(--muted); font-size:11px; }
+    .activity-item { display:grid; grid-template-columns:32px minmax(0,1fr) auto; gap:13px; align-items:start; border-bottom:1px solid var(--line); padding:17px 0; }
+    .activity-item[data-status="warning"] .activity-dot { background:rgba(237,139,91,.16); color:#ed8b5b; }
+    .activity-item[data-status="error"] .activity-dot { background:rgba(224,88,101,.16); color:#e05865; }
+    .activity-dot { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); font-size:12px; }
+    .activity-item strong { display:block; color:var(--ink); font-size:13px; font-weight:650; }
+    .activity-item small { display:block; color:var(--muted); margin-top:5px; line-height:1.5; overflow-wrap:anywhere; }
+    .activity-item time { color:var(--faint); font-size:11px; white-space:nowrap; padding-top:2px; }
+    .activity-status { display:inline-flex; margin-top:8px; padding:3px 7px; border-radius:5px; background:var(--accent-soft); color:var(--accent-bright); font-size:10px; text-transform:uppercase; letter-spacing:.5px; }
+    .activity-status.warning { background:rgba(237,139,91,.14); color:#ed8b5b; }
+    .activity-status.error { background:rgba(224,88,101,.14); color:#e05865; }
+    .activity-terminal { margin-top:30px; border:1px solid var(--line); border-radius:10px; background:#0a0a0f; overflow:hidden; }
+    .activity-terminal[hidden] { display:none; }
+    .activity-terminal-head { display:flex; align-items:center; gap:9px; padding:10px 13px; border-bottom:1px solid rgba(171,95,239,.2); color:var(--muted); font-size:11px; }
+    .activity-terminal-head i { width:7px; height:7px; border-radius:50%; background:var(--green); }
+    .activity-terminal-head button { margin-left:auto; }
+    .activity-terminal-output { max-height:260px; overflow:auto; padding:13px; color:#b8b2c5; font:11px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .activity-terminal-line { display:block; }
+    .activity-terminal-line .terminal-time { color:#6b6479; }
+    .activity-terminal-line .terminal-level { color:var(--accent-bright); }
+    .activity-terminal-line.error .terminal-level { color:#e05865; }
+    .activity-terminal-line.warning .terminal-level { color:#ed8b5b; }
+    @media (max-width: 600px) { .activity-summary { grid-template-columns:1fr; } .activity-toolbar { align-items:flex-start; flex-direction:column; } .activity-item { grid-template-columns:30px minmax(0,1fr); } .activity-item time { grid-column:2; } }
     .storage { border-left:1px solid var(--line); padding-left: 24px; }
     .storage h3 { font: 650 22px/1.2 var(--ui); margin:0 0 5px; }
     .storage p { color:var(--muted); font-size:12px; margin:0 0 20px; }
     .bar { height:8px; background:#4a425d; border-radius:10px; overflow:hidden; margin-bottom:9px; }
     .bar i { display:block; width:64%; height:100%; background:var(--accent); border-radius:inherit; }
     .storage-foot { display:flex; justify-content:space-between; color:var(--faint); font-size:11px; }
-    .automation-grid { display:grid; grid-template-columns: 1.2fr .8fr; gap:50px; max-width: 990px; }
-    .automation-hero { border-bottom:1px solid var(--line); padding-bottom:24px; }
-    .automation-hero h2 { font:650 34px/1.15 var(--ui); margin: 9px 0; }
-    .automation-hero p { color:var(--muted); max-width:430px; }
-    .toggle-row { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding:17px 0; }
+    .automation-grid { display:grid; grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); gap:36px; max-width: 1180px; align-items:start; }
+    .automation-hero { border-bottom:1px solid var(--line); padding-bottom:18px; }
+    .automation-hero h2 { font:650 31px/1.15 var(--ui); margin: 6px 0 8px; }
+    .automation-hero p { color:var(--muted); max-width:560px; margin:0 0 17px; }
+    .toggle-row { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding:13px 0; }
     .toggle-row strong { font-size:12px; }
     .toggle-row small { display:block; color:var(--faint); margin-top:3px; }
     .toggle { width:37px; height:21px; border:0; border-radius:20px; background:#4a425d; cursor:pointer; padding:2px; }
@@ -148,15 +199,73 @@
     .toggle.on { background:var(--accent); }
     .toggle.on i { transform:translateX(16px); background:#0e0d14; }
     .setting-list { border-top:1px solid var(--line); }
-    .setting { display:flex; justify-content:space-between; gap:25px; padding:15px 0; border-bottom:1px solid var(--line); }
+    .setting { display:flex; justify-content:space-between; gap:25px; padding:12px 0; border-bottom:1px solid var(--line); }
     .setting span { color:var(--muted); font-size:12px; }
     .setting code { color:var(--accent); font:11px ui-monospace, monospace; text-align:right; }
     .folder-setting { display:flex; flex-direction:column; align-items:flex-end; gap:9px; min-width:0; }
     .folder-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .settings-layout { display:grid; grid-template-columns:minmax(0, 1.08fr) minmax(280px, .92fr); gap:38px; max-width:1120px; align-items:start; }
+    .settings-section { border-top:1px solid var(--line); padding-top:16px; margin-top:24px; }
+    .settings-section:first-child { margin-top:0; }
+    .settings-section h2 { font:650 18px/1.2 var(--ui); margin:0 0 5px; letter-spacing:-.2px; }
+    .settings-section > p { color:var(--muted); margin:0 0 15px; font-size:12px; }
+    .settings-section .setting-list { max-width:none; }
+    .settings-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+    .settings-card { border:1px solid var(--line); border-radius:10px; padding:20px; background:rgba(33,32,39,.42); }
+    .settings-card .theme-setting { margin-top:0; padding-top:0; border-top:0; }
+    .settings-card .theme-setting h2 { margin-top:0; }
+    .settings-note { color:var(--faint); font-size:11px; line-height:1.5; margin-top:14px; }
     .onboarding-folder-actions { margin-top:10px; }
     .empty { padding:55px 0; color:var(--muted); border-top:1px solid var(--line); }
+    .detail-head { display:flex; align-items:flex-start; gap:18px; margin-bottom:24px; }
+    .detail-head .btn { flex:0 0 auto; }
+    .detail-heading { min-width:0; }
+    .detail-heading h1 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .detail-meta { color:var(--muted); margin:0; }
+    .photo-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:18px; }
+    .photo-entry { min-width:0; content-visibility:auto; contain-intrinsic-size:220px; }
+    .photo-tile { position:relative; display:block; width:100%; aspect-ratio:1.23; overflow:hidden; border:1px solid var(--line); border-radius:9px; background:#2f2c47; cursor:zoom-in; padding:0; transition:transform .18s ease,border-color .18s ease; }
+    .photo-tile:hover { transform:translateY(-2px); border-color:var(--accent); }
+    .photo-tile img { width:100%; height:100%; object-fit:cover; display:block; }
+    .photo-tile:focus-visible { outline:2px solid var(--accent-bright); outline-offset:3px; }
+    .photo-meta { padding:8px 2px 0; color:var(--muted); font-size:11px; }
+    .photo-meta-row { display:flex; gap:7px; align-items:center; }
+    .photo-meta-row strong { color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .photo-meta-empty { color:var(--faint); font-size:11px; }
+    .photo-skeleton { position:absolute; inset:0; background:linear-gradient(110deg,#2f2c47 8%,#45405b 18%,#2f2c47 33%); background-size:200% 100%; animation:skeleton 1.3s linear infinite; }
+    .photo-tile.loaded .photo-skeleton { display:none; }
+    .photo-error { position:absolute; inset:0; display:grid; place-items:center; padding:14px; color:var(--muted); font-size:11px; text-align:center; background:#211f35; }
+    [hidden], .photo-error[hidden] { display:none !important; }
+    @keyframes skeleton { to { background-position:-200% 0; } }
+    @keyframes detail-in { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
+    .lightbox { position:fixed; inset:0; z-index:20; display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:24px; align-items:stretch; padding:58px 34px 28px; background:rgba(14,13,20,.97); animation:lightbox-in .2s ease both; }
+    .lightbox[hidden] { display:none; }
+    .lightbox img { max-width:100%; max-height:100%; object-fit:contain; border-radius:8px; }
+    .lightbox-media { position:relative; min-width:0; min-height:0; display:grid; place-items:center; padding:18px 58px; }
+    .lightbox-panel { min-width:0; border-left:1px solid var(--line); padding:12px 0 0 24px; }
+    .lightbox-panel h2 { margin:7px 0 5px; font-size:20px; overflow-wrap:anywhere; }
+    .lightbox-panel p { color:var(--muted); margin:0 0 16px; }
+    .lightbox-players { display:flex; flex-wrap:wrap; gap:5px; margin:9px 0 20px; }
+    .photo-person { color:var(--ink); background:var(--accent-soft); border:1px solid var(--line); border-radius:5px; padding:4px 7px; font-size:10px; }
+    .lightbox-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .lightbox-nav { position:absolute; inset:0; display:flex; align-items:center; justify-content:space-between; pointer-events:none; padding:0 8px; }
+    .lightbox-nav button { pointer-events:auto; width:42px; height:42px; border-radius:50%; background:rgba(33,32,39,.82); }
+    .lightbox-counter { position:absolute; left:34px; top:20px; color:var(--ink); font-size:12px; z-index:1; }
+    .lightbox-close { position:absolute; top:14px; right:24px; z-index:1; }
+    @keyframes lightbox-in { from { opacity:0; } to { opacity:1; } }
     .toast { position:fixed; bottom:20px; right:24px; padding:12px 15px; background:#2f2c47; border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:0 12px 30px rgba(14,13,20,.5); transform:translateY(15px); opacity:0; pointer-events:none; transition:.25s; }
     .toast.show { transform:none; opacity:1; }
+    .change-warning { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:24px; background:rgba(14,13,20,.8); backdrop-filter:blur(12px); }
+    .change-warning[hidden] { display:none; }
+    .change-warning-panel { width:min(100%, 500px); padding:30px; border:1px solid rgba(237,139,91,.55); border-radius:14px; background:var(--surface); box-shadow:0 24px 70px rgba(0,0,0,.48); }
+    .change-warning-icon { display:grid; place-items:center; width:34px; height:34px; margin-bottom:17px; border-radius:50%; background:rgba(237,139,91,.16); color:#ed8b5b; font-weight:700; }
+    .change-warning-panel h2 { font:650 27px/1.15 var(--ui); letter-spacing:-.5px; margin:0 0 10px; }
+    .change-warning-panel p { color:var(--muted); margin:0 0 18px; }
+    .change-warning-list { display:grid; gap:9px; margin:0 0 25px; padding:0; list-style:none; color:var(--ink); }
+    .change-warning-list li { display:flex; gap:9px; align-items:flex-start; }
+    .change-warning-list li::before { content:""; flex:0 0 6px; width:6px; height:6px; margin-top:7px; border-radius:50%; background:#ed8b5b; }
+    .change-warning-actions { display:flex; justify-content:flex-end; gap:9px; }
+    @media (max-width: 600px) { .change-warning-panel { padding:26px 22px; } .change-warning-actions { flex-direction:column-reverse; } .change-warning-actions .btn { width:100%; } }
     .onboarding { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:24px; background:rgba(14,13,20,.78); backdrop-filter:blur(12px); }
     .onboarding[hidden] { display:none; }
     .onboarding-panel { width:min(100%, 590px); padding:34px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:0 24px 70px rgba(0,0,0,.42); }
@@ -206,13 +315,26 @@
       .nav button { justify-content:center; padding:12px; } .nav-icon { font-size:18px; }
       .topbar, .content { padding-left:22px; padding-right:22px; }
       .library-head { align-items:flex-start; flex-direction:column; gap:18px; } .actions { width:100%; }
-      .activity-layout, .automation-grid, .collection-layout { grid-template-columns:1fr; gap:30px; }
+      .activity-layout, .automation-grid, .collection-layout, .settings-layout { grid-template-columns:1fr; gap:30px; }
       .storage { border-left:0; border-top:1px solid var(--line); padding:25px 0 0; }
+    }
+    @media (max-width: 900px) {
+      .lightbox { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) auto; gap:12px; padding:52px 14px 14px; }
+      .lightbox-media { padding:12px 44px; }
+      .lightbox-panel { border-left:0; border-top:1px solid var(--line); padding:14px 0 0; }
+      .lightbox img { max-height:100%; }
     }
     @media (max-width: 600px) {
       .topbar { gap:10px; } .crumb { display:none; } .search { width:auto; flex:1; }
       .content { padding-top:24px; } .world-grid { grid-template-columns:repeat(2, 1fr); gap:12px; }
       .photo-row { grid-template-columns:repeat(2, 1fr); } .day { grid-template-columns:1fr; gap:11px; }
+      .photo-grid { grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+      .photo-meta { padding:6px 2px 0; }
+      .lightbox { padding-top:52px; }
+      .lightbox img { max-height:100%; }
+      .lightbox-counter { left:14px; top:13px; }
+      .lightbox-close { top:8px; right:10px; }
+      .lightbox-nav { padding:0 4px; }
       .stats-line { gap:12px; overflow:auto; } .stat { white-space:nowrap; }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
@@ -239,23 +361,28 @@
       <div class="watch-card"><div class="watch-top"><i class="pulse" id="watchPulse"></i><span id="watchLabel">Watcher paused</span></div><div class="watch-copy" id="watchCopy">New screenshots are waiting for you.</div><button class="text-btn" id="watchToggle">Start watching →</button></div>
     </aside>
     <main class="main">
-      <header class="topbar"><div class="crumb">VRChat Organizer <span style="color:var(--faint)">/</span> <strong id="crumbTitle">Library</strong></div><div class="top-spacer"></div><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="search" type="search" placeholder="Search worlds and photos"></label><button class="icon-btn" title="Refresh library" id="refresh">↻</button></header>
+      <header class="topbar"><div class="crumb">VRChat Organizer <span style="color:var(--faint)">/</span> <strong id="crumbTitle">Library</strong></div><div class="top-spacer"></div><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="search" type="search" placeholder="Search worlds"></label><button class="icon-btn" title="Refresh library" id="refresh">↻</button></header>
       <div class="content">
         <section class="view active" id="library">
-          <div class="library-head"><div><div class="eyebrow">World library</div><h1 id="welcomeHeading">Welcome back.</h1><p class="intro" id="welcomeIntro">A visual home for every world you have captured. Your newest memories, organized automatically.</p></div><div class="top-spacer"></div><div class="actions"><button class="btn" id="scan">Scan folder</button><button class="btn primary" id="watchMain">Start watching</button></div></div>
+          <div class="library-head"><div><div class="eyebrow">World library</div><h1 id="welcomeHeading">Welcome back.</h1><p class="intro" id="welcomeIntro">A visual home for every world you have captured. Your newest memories, organized automatically.</p></div><div class="top-spacer"></div><div class="actions"><button class="btn" id="scan">Scan folder</button><button class="btn" id="scanAll">Scan all <span class="scan-all-note">(may take some time)</span></button><button class="btn primary" id="watchMain">Start watching</button></div></div>
           <div class="stats-line"><div class="stat"><strong id="photoTotal">0</strong><span>photos</span></div><div class="stat"><strong id="worldTotal">0</strong><span>worlds</span></div><div class="stat"><strong id="lastCapture">—</strong><span>last capture</span></div><div class="top-spacer"></div><span style="font-size:11px;color:var(--faint)">Sorted by recent</span></div>
           <div class="session-status" aria-live="polite"><div class="session-status-item"><i class="session-dot" id="vrcxStatusDot"></i><span>VRCX <strong id="vrcxStatusLabel">Checking…</strong></span></div><div class="session-status-item"><i class="session-dot" id="vrchatStatusDot"></i><span>VRChat <strong id="vrchatStatusLabel">Checking…</strong></span></div><div class="session-status-item"><span id="vrchatDuration">Session time unavailable</span></div></div>
           <div class="library-tools"><div class="filter"><button class="active" data-filter="all">All worlds</button><button data-filter="favorite">Favourites</button><button data-filter="recent">Recently visited</button></div><select class="sort" id="sort" aria-label="Sort worlds"><option value="recent">Recently visited</option><option value="photos">Most photos</option><option value="name">Name</option></select></div>
           <div class="world-grid" id="worldGrid"></div>
         </section>
+        <section class="view" id="worldDetail">
+          <div class="detail-head"><button class="btn" id="backToLibrary">← Back to Library</button><div class="detail-heading"><div class="eyebrow">World detail</div><h1 id="detailTitle"></h1><p class="detail-meta" id="detailMeta"></p></div></div>
+          <div class="photo-grid" id="detailGrid"></div>
+        </section>
         <section class="view" id="timeline"><div class="eyebrow">Timeline</div><h1>Every captured moment.</h1><p class="intro" style="margin-bottom:30px">Browse your screenshots as a living record of the places you visited.</p><div class="timeline" id="timelineList"></div></section>
-        <section class="view" id="collections"><div class="eyebrow">Collections</div><h1>Your collections.</h1><p class="intro" style="margin-bottom:30px">Collections will appear here once you have organized screenshots.</p><div class="empty">No collections yet.</div></section>
-        <section class="view" id="activity"><div class="eyebrow">Activity</div><h1>Your library, in motion.</h1><p class="intro" style="margin-bottom:30px">A quiet record of what Organizer has done for you.</p><div class="empty">No activity yet. Run a scan to get started.</div></section>
-        <section class="view" id="automation"><div class="eyebrow">Automation</div><h1>Let the library keep up.</h1><p class="intro" style="margin-bottom:31px">Organizer can quietly sort new captures while you stay in VR.</p><div class="automation-grid"><div><div class="automation-hero"><h2 id="automationStatus">Watcher is paused.</h2><p>When active, new screenshots are detected and moved into their world folder as soon as they appear.</p><button class="btn primary" id="automationToggle">Start watching</button></div><div class="toggle-row"><div><strong>Watch for new screenshots</strong><small>Organize captures as they arrive</small></div><button class="toggle" id="watchSwitch"><i></i></button></div><div class="toggle-row"><div><strong>Scan all month folders</strong><small>Include older VRChat captures</small></div><button class="toggle on" aria-label="Scan all month folders enabled"><i></i></button></div></div><div><div class="section-title"><h2>Folder</h2></div><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="folderPath">~/Pictures/VRChat/VRChat</code><div class="folder-actions"><button class="btn" id="automationAutoLocate" type="button">Auto Locate</button><button class="btn" id="automationChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div><div class="setting"><span>Metadata source</span><code>VRCX</code></div></div></div></div></section>
-        <section class="view" id="settings"><div class="eyebrow">Settings</div><h1>Make it yours.</h1><p class="intro" style="margin-bottom:31px">The essentials for a library that behaves the way you expect.</p><div class="setting-list" style="max-width:760px"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="settingsFolder">~/Pictures/VRChat/VRChat</code><div class="folder-actions"><button class="btn" id="settingsAutoLocate" type="button">Auto Locate</button><button class="btn" id="settingsChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>World folder template</span><code>{world}</code></div><div class="setting"><span>Metadata provider</span><code>VRCX · Connected</code></div><div class="setting"><span>Appearance</span><code id="appearanceSetting">Dark · Custom accent</code></div><div class="setting"><span>Welcome name</span><div class="name-setting"><code id="settingsName">Not set</code><button class="btn" id="editName">Edit</button></div></div></div><div class="theme-setting"><h2>Choose your colors</h2><p>Pick an accent that feels like you. Your choice is saved on this device and applied across the library.</p><div class="theme-options" role="group" aria-label="Accent color themes"><button class="theme-swatch" data-theme="violet" style="--swatch:#ab5fef" type="button"><i></i>Violet</button><button class="theme-swatch" data-theme="ocean" style="--swatch:#4bb8d8" type="button"><i></i>Ocean</button><button class="theme-swatch" data-theme="sunset" style="--swatch:#ed8b5b" type="button"><i></i>Sunset</button><button class="theme-swatch" data-theme="forest" style="--swatch:#6fcf97" type="button"><i></i>Forest</button><label class="custom-theme">Custom <input id="customTheme" type="color" value="#ab5fef" aria-label="Choose a custom accent color"></label></div></div><div style="margin-top:24px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="simulate">Preview organization</button><button class="btn" id="undo">Undo last organization</button></div><pre id="previewPanel" style="display:none;margin-top:18px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--muted);border:1px solid var(--line);padding:14px;border-radius:8px"></pre></section>
+        <section class="view" id="collections"><div class="eyebrow">Collections</div><h1>Your favourites.</h1><p class="intro" style="margin-bottom:22px">Keep the worlds you return to most close at hand, or make a collection for a theme.</p><form class="collection-tools" id="collectionForm"><input id="collectionName" type="text" maxlength="40" placeholder="New collection name" aria-label="New collection name"><button class="btn primary" type="submit">Create collection</button></form><div class="collection-list" id="collectionsList"></div></section>
+        <section class="view" id="activity"><div class="eyebrow">Activity</div><h1>Everything Organizer has done.</h1><p class="intro" style="margin-bottom:22px">Review scans, moves, restores, and warnings with clear file counts and timings.</p><div class="activity-toolbar"><p id="activityUpdated">No activity recorded yet.</p><button class="btn" id="toggleTerminal" type="button" aria-expanded="false">Show log terminal</button></div><div class="activity-summary"><div class="activity-stat"><strong id="activityRuns">0</strong><span>operations</span></div><div class="activity-stat"><strong id="activityFiles">0</strong><span>files affected</span></div><div class="activity-stat"><strong id="activityWarnings">0</strong><span>warnings</span></div></div><div class="activity-list" id="activityList"><div class="empty">No activity yet. Run a scan to get started.</div></div><div class="activity-terminal" id="activityTerminal" hidden><div class="activity-terminal-head"><i></i><span>Live activity log</span><button class="text-btn" id="clearTerminal" type="button">Clear</button></div><div class="activity-terminal-output" id="activityTerminalOutput"><span class="activity-terminal-line"><span class="terminal-time">--:--:--</span> <span class="terminal-level">INFO</span> Waiting for activity…</span></div></div></section>
+        <section class="view" id="automation"><div class="eyebrow">Automation</div><h1>Let the library keep up.</h1><p class="intro" style="margin-bottom:20px">Organizer can quietly sort new captures while you stay in VR.</p><div class="automation-grid"><div><div class="automation-hero"><h2 id="automationStatus">Watcher is paused.</h2><p>When active, new screenshots are detected and moved into their world folder as soon as they appear.</p><button class="btn primary" id="automationToggle">Start watching</button></div><div class="toggle-row"><div><strong>Watch for new screenshots</strong><small>Organize captures as they arrive</small></div><button class="toggle" id="watchSwitch"><i></i></button></div><div class="toggle-row"><div><strong>Scan all month folders</strong><small>Off by default; enable only for a full historical scan</small></div><button class="toggle" id="scanAllMonthsSwitch" aria-label="Toggle scanning all month folders"><i></i></button></div></div><div><div class="section-title"><h2>Folder</h2></div><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="folderPath">~/Pictures/VRChat</code><div class="folder-actions"><button class="btn" id="automationAutoLocate" type="button">Auto Locate</button><button class="btn" id="automationChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div><div class="setting"><span>Metadata source</span><code>VRCX</code></div></div></div></div></section>
+        <section class="view" id="settings"><div class="eyebrow">Settings</div><h1>Make it yours.</h1><p class="intro" style="margin-bottom:24px">Keep your folder, library behavior, and appearance easy to understand and change.</p><div class="settings-layout"><div><section class="settings-section"><h2>Library</h2><p>Choose where Organizer finds and organizes your screenshots.</p><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="settingsFolder">~/Pictures/VRChat</code><div class="folder-actions"><button class="btn" id="settingsAutoLocate" type="button">Auto Locate</button><button class="btn" id="settingsChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>World folder template</span><code>{world}</code></div><div class="setting"><span>Metadata provider</span><code>VRCX · Connected</code></div></div></section><section class="settings-section"><h2>Preferences</h2><p>Personalize the way the app greets you and reports diagnostics.</p><div class="setting-list"><div class="setting"><span>Welcome name</span><div class="name-setting"><code id="settingsName">Not set</code><button class="btn" id="editName">Edit</button></div></div><div class="setting"><span>Media diagnostics</span><button class="btn" id="debugToggle" type="button">Off</button></div></div></section><div class="settings-actions"><button class="btn" id="simulate">Preview organization</button><button class="btn" id="undo">Undo last organization</button></div><pre id="previewPanel" style="display:none;margin-top:18px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--muted);border:1px solid var(--line);padding:14px;border-radius:8px"></pre></div><aside class="settings-card"><div class="settings-section" style="margin:0;border-top:0;padding-top:0"><h2>About this app</h2><p>Current installation and organization details.</p><div class="setting-list"><div class="setting"><span>Application version</span><code>2.0.1</code></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div></div></div><div class="theme-setting"><h2>Appearance</h2><p>Choose an accent that feels right. Your choice is saved on this device.</p><div class="setting" style="padding-top:0"><span>Current theme</span><code id="appearanceSetting">Dark · Custom accent</code></div><div class="theme-options" role="group" aria-label="Accent color themes"><button class="theme-swatch" data-theme="violet" style="--swatch:#ab5fef" type="button"><i></i>Violet</button><button class="theme-swatch" data-theme="ocean" style="--swatch:#4bb8d8" type="button"><i></i>Ocean</button><button class="theme-swatch" data-theme="sunset" style="--swatch:#ed8b5b" type="button"><i></i>Sunset</button><button class="theme-swatch" data-theme="forest" style="--swatch:#6fcf97" type="button"><i></i>Forest</button><label class="custom-theme">Custom <input id="customTheme" type="color" value="#ab5fef" aria-label="Choose a custom accent color"></label></div><p class="settings-note">Your settings stay on this device. Folder changes apply to the next scan or watch session.</p></div></aside></div></section>
       </div>
     </main>
   </div>
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media"><img id="lightboxImage" alt=""><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxTime"></p><div class="photo-meta-row"><span>Players</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside></div>
   <div class="onboarding" id="onboarding" hidden>
     <div class="onboarding-panel" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
       <div class="onboarding-top"><div class="eyebrow">Getting started</div><span class="onboarding-step" id="onboardingStep">Step 1 of 3</span></div>
@@ -297,24 +424,54 @@
     </div>
   </div>
   <div class="toast" id="toast"></div>
+  <div class="collection-picker" id="collectionPicker" hidden role="dialog" aria-modal="true" aria-labelledby="collectionPickerTitle">
+    <div class="collection-picker-panel">
+      <div class="collection-picker-head"><div><h2 id="collectionPickerTitle">Add photos</h2><p id="collectionPickerDescription">Choose screenshots to copy into this collection.</p></div><button class="btn collection-picker-close" id="collectionPickerClose" type="button">Close</button></div>
+      <div class="collection-photo-grid" id="collectionPhotoGrid"></div>
+      <div class="collection-picker-actions"><button class="btn" id="collectionPickerCancel" type="button">Cancel</button><button class="btn primary" id="collectionPickerSave" type="button">Copy selected photos</button></div>
+    </div>
+  </div>
+  <div class="change-warning" id="changeWarning" hidden role="dialog" aria-modal="true" aria-labelledby="changeWarningTitle" aria-describedby="changeWarningDescription">
+    <div class="change-warning-panel">
+      <div class="change-warning-icon" aria-hidden="true">!</div>
+      <h2 id="changeWarningTitle">This will modify your files</h2>
+      <p id="changeWarningDescription">VRChat Organizer needs to make changes to your screenshot folder to organize your library.</p>
+      <ul class="change-warning-list">
+        <li>Existing screenshots may be moved into world and date folders, or restored by Undo.</li>
+        <li>New screenshots can be organized automatically while watching is enabled.</li>
+        <li>An activity log and undo history will be created in the selected folder.</li>
+      </ul>
+      <div class="change-warning-actions">
+        <button class="btn" id="changeWarningCancel" type="button">Cancel</button>
+        <button class="btn primary" id="changeWarningContinue" type="button">Continue</button>
+      </div>
+    </div>
+  </div>
   <script>
     const invoke = window.__TAURI__?.core?.invoke || (async (cmd, args) => {
       if (cmd === 'get_default_path') return '~/Pictures/VRChat/VRChat';
       if (cmd === 'validate_folder') return args?.folderPath || '~/Pictures/VRChat/VRChat';
       if (cmd === 'is_watching') return false;
       if (cmd === 'get_vrchat_status') return { vrcxRunning: false, vrchatRunning: false, vrchatStartedAt: null };
-      if (cmd === 'organize_folder' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run') return Promise.reject('This action requires the desktop app');
+      if (cmd === 'organize_folder' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'get_library' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run' || cmd === 'log_frontend_diagnostic' || cmd === 'open_photo_location' || cmd === 'copy_photo_path' || cmd === 'add_photos_to_collection') return Promise.reject('This action requires the desktop app');
       return {};
     });
     const listen = window.__TAURI__?.event?.listen || (async () => () => {});
-    const images = [];
+    let images = [];
+    let libraryRefreshInFlight = null;
+    let scanInFlight = false;
     const photoImages = [];
+    let viewerState = null;
     let watching = false, currentFilter = 'all';
     const $ = (s) => document.querySelector(s);
     const nameStorageKey = 'vrchat-organizer-name';
     const folderStorageKey = 'vrchat-organizer-folder';
     const onboardingStorageKey = 'vrchat-organizer-onboarding-complete';
+    const changeWarningStorageKey = 'vrchat-organizer-change-warning-seen';
     const themeStorageKey = 'vrchat-organizer-theme';
+    const scanAllMonthsStorageKey = 'vrchat-organizer-scan-all-months';
+    const favoritesStorageKey = 'vrchat-organizer-favourites';
+    const collectionsStorageKey = 'vrchat-organizer-collections';
     const themes = {
       violet: '#ab5fef',
       ocean: '#4bb8d8',
@@ -322,6 +479,8 @@
       forest: '#6fcf97'
     };
     let onboardingStep = 1;
+    let changeWarningPromise = null;
+    let collectionPickerState = null;
     const greetingParts = [
       { start: 5, label: 'Good morning' },
       { start: 12, label: 'Good afternoon' },
@@ -377,6 +536,14 @@
       $('#onboardingPath').textContent = path;
       localStorage.setItem(folderStorageKey, path);
     }
+    function scanAllMonthsEnabled() {
+      return localStorage.getItem(scanAllMonthsStorageKey) === 'true';
+    }
+    function setScanAllMonths(next) {
+      localStorage.setItem(scanAllMonthsStorageKey, String(next));
+      $('#scanAllMonthsSwitch').classList.toggle('on', next);
+      $('#scanAllMonthsSwitch').setAttribute('aria-pressed', String(next));
+    }
     async function validateAndSetFolder(path) {
       if (!path) return false;
       try {
@@ -430,15 +597,48 @@
       localStorage.setItem(onboardingStorageKey, 'true');
       closeNameOnboarding();
     }
+    function confirmFileChanges({ longScan = false } = {}) {
+      if (!longScan && localStorage.getItem(changeWarningStorageKey) === 'true') return Promise.resolve(true);
+      if (changeWarningPromise) return changeWarningPromise;
+      const dialog = $('#changeWarning');
+      const title = $('#changeWarningTitle');
+      const description = $('#changeWarningDescription');
+      const list = $('.change-warning-list');
+      const originalTitle = title.textContent;
+      const originalDescription = description.textContent;
+      const originalList = list.innerHTML;
+      if (longScan) {
+        title.textContent = 'Scan all screenshots?';
+        description.textContent = 'This scans every month folder in your selected VRChat screenshot folder and may take some time.';
+        list.innerHTML = '<li>Files may be moved while they are organized.</li><li>Keep the app open until the scan finishes.</li><li>An activity log and undo history will be updated.</li>';
+      }
+      dialog.hidden = false;
+      $('#changeWarningContinue').focus();
+      changeWarningPromise = new Promise(resolve => {
+        const finish = accepted => {
+          dialog.hidden = true;
+          changeWarningPromise = null;
+          title.textContent = originalTitle;
+          description.textContent = originalDescription;
+          list.innerHTML = originalList;
+          if (accepted) localStorage.setItem(changeWarningStorageKey, 'true');
+          resolve(accepted);
+        };
+        $('#changeWarningContinue').onclick = () => finish(true);
+        $('#changeWarningCancel').onclick = () => finish(false);
+      });
+      return changeWarningPromise;
+    }
     async function scanFromOnboarding() {
+      if (!await confirmFileChanges()) return;
       const button = $('#onboardingScan');
       button.disabled = true;
       button.querySelector('strong').textContent = 'Scanning…';
       try {
-        const result = await invoke('organize_folder', { folderPath: $('#folderPath').textContent, dryRun: false, scanAllMonths: true, singleFolder: false, template: '{world}' });
+        const result = await invoke('organize_folder', { folderPath: $('#folderPath').textContent, dryRun: false, scanAllMonths: scanAllMonthsEnabled(), singleFolder: false, template: '{world}' });
         completeOnboarding();
-        toast(result?.organized ? `${result.organized} screenshots organized` : 'Scan complete — your library is ready');
-        renderWorlds();
+        toast(result?.errors ? `Scan completed with ${result.errors} error(s)` : (result?.organized ? `${result.organized} screenshots organized` : 'Scan complete — your library is ready'));
+        await refreshLibrary();
       } catch (error) {
         toast(`Scan could not be completed: ${String(error)}`);
       } finally {
@@ -472,30 +672,336 @@
         renderVrChatStatus(null);
       }
     }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+    }
+    function readStoredJson(key, fallback) {
+      try {
+        const value = JSON.parse(localStorage.getItem(key) || 'null');
+        return value ?? fallback;
+      } catch (error) {
+        console.warn(`[VRChat Organizer] invalid local storage for ${key}`, error);
+        localStorage.removeItem(key);
+        return fallback;
+      }
+    }
+    const debugStorageKey = 'vrchat-organizer-debug-media';
+    function debugEnabled() { return localStorage.getItem(debugStorageKey) === 'true'; }
+    function updateDebugToggle() { const button = $('#debugToggle'); if (button) { button.textContent = debugEnabled() ? 'On' : 'Off'; button.classList.toggle('primary', debugEnabled()); } }
+    function debugLog(event, details = {}) {
+      if (!debugEnabled()) return;
+      const payload = JSON.stringify(details);
+      console.info(`[VRChat Organizer] ${event}`, details);
+      const folderPath = $('#folderPath')?.textContent;
+      if (folderPath) invoke('log_frontend_diagnostic', { folderPath, level: 'INFO', event, details: payload }).catch(error => console.warn('[VRChat Organizer] diagnostic write failed', error));
+    }
+    function assetUrl(path) {
+      if (!path) return '';
+      const normalizedPath = String(path).replace(/\\/g, '/');
+      const convert = window.__TAURI__?.core?.convertFileSrc;
+      const url = convert ? convert(normalizedPath) : `file://${encodeURI(normalizedPath)}`;
+      debugLog('media_url_resolved', { filePath: path, normalizedPath, url });
+      return url;
+    }
+    function formatCaptureTime(timestamp) {
+      if (!timestamp) return '—';
+      return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(Number(timestamp) * 1000);
+    }
+    function renderPeople(people) {
+      return Array.isArray(people) && people.length
+        ? `<div class="photo-people">${people.map(person => `<span class="photo-person">${escapeHtml(person)}</span>`).join('')}</div>`
+        : '<div class="photo-meta-empty">No player list in this capture</div>';
+    }
+    function applyLibrarySnapshot(snapshot) {
+      const favorites = readStoredJson(favoritesStorageKey, []);
+      images = Array.isArray(snapshot?.worldDetails) ? snapshot.worldDetails.map(world => ({
+        name: world.name,
+        photos: Array.isArray(world.photos) ? world.photos : [],
+        lastCapture: world.lastCapture || null,
+        favorite: favorites.includes(world.name)
+      })) : [];
+      updateNavigationCounts();
+    }
+    async function refreshLibrary() {
+      if (libraryRefreshInFlight) return libraryRefreshInFlight;
+      const path = $('#folderPath').textContent;
+      libraryRefreshInFlight = (async () => {
+        try {
+          applyLibrarySnapshot(await invoke('get_library', { folderPath: path, scanAllMonths: scanAllMonthsEnabled() }));
+          await refreshActivity();
+          renderWorlds();
+          renderTimeline();
+          renderCollections();
+        } catch (error) {
+          toast(`Library refresh failed: ${String(error)}`);
+        } finally {
+          libraryRefreshInFlight = null;
+        }
+      })();
+      return libraryRefreshInFlight;
+    }
+    async function refreshActivity() {
+      try {
+        const entries = await invoke('get_activity', { folderPath: $('#folderPath').textContent });
+        const list = Array.isArray(entries) ? entries : [];
+        const recent = list.slice().reverse();
+        const affected = list.reduce((total, entry) => total + Number(entry.files_affected || 0), 0);
+        const warnings = list.filter(entry => entry.status === 'warning' || entry.status === 'error').length;
+        $('#activityRuns').textContent = String(list.length);
+        $('#activityFiles').textContent = String(affected);
+        $('#activityWarnings').textContent = String(warnings);
+        $('#activityUpdated').textContent = list.length ? `Last updated ${formatActivityTime(recent[0].timestamp)}` : 'No activity recorded yet.';
+        $('#activityList').innerHTML = recent.length ? recent.map(entry => {
+          const status = String(entry.status || 'info').toLowerCase();
+          const icon = status === 'success' ? '✓' : status === 'warning' ? '!' : status === 'error' ? '×' : '·';
+          const duration = Number(entry.duration_ms || 0);
+          return `<article class="activity-item" data-status="${escapeHtml(status)}"><div class="activity-dot">${icon}</div><div><strong>${escapeHtml(formatOperation(entry.operation))}</strong><small>${escapeHtml(entry.details || 'No details recorded')} · ${Number(entry.files_affected || 0)} file${Number(entry.files_affected || 0) === 1 ? '' : 's'} affected${duration ? ` · ${duration} ms` : ''}</small><span class="activity-status ${escapeHtml(status)}">${escapeHtml(status)}</span></div><time>${escapeHtml(formatActivityTime(entry.timestamp))}</time></article>`;
+        }).join('') : '<div class="empty">No activity yet. Run a scan to get started.</div>';
+        if (list.length && !terminalHasHistory) recent.slice(0, 30).reverse().forEach(entry => appendTerminalLine(entry.status, `${formatOperation(entry.operation)} · ${entry.details || `${entry.files_affected || 0} files affected`}`));
+      } catch (error) {
+        $('#activityList').textContent = `Activity log unavailable: ${String(error)}`;
+      }
+    }
+    let terminalHasHistory = false;
+    function formatOperation(operation) {
+      return String(operation || 'operation').replace(/[-_]/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
+    }
+    function formatActivityTime(timestamp) {
+      if (!timestamp) return '—';
+      const date = new Date(timestamp);
+      return Number.isNaN(date.getTime()) ? String(timestamp) : new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    }
+    function appendTerminalLine(level, message) {
+      const output = $('#activityTerminalOutput');
+      if (!output) return;
+      if (!terminalHasHistory) output.innerHTML = '';
+      terminalHasHistory = true;
+      const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+      const normalized = String(level || 'info').toLowerCase();
+      const line = document.createElement('span');
+      line.className = `activity-terminal-line ${normalized}`;
+      line.innerHTML = `<span class="terminal-time">${escapeHtml(time)}</span> <span class="terminal-level">${escapeHtml(normalized.toUpperCase())}</span> ${escapeHtml(message)}`;
+      output.appendChild(line);
+      output.scrollTop = output.scrollHeight;
+    }
     function renderWorlds() {
       const query = ($('#search').value || '').toLowerCase().trim();
       const sort = $('#sort').value;
       updateNavigationCounts();
-      let list = images.filter(x => currentFilter === 'all' || (currentFilter === 'favorite' && x[4]) || (currentFilter === 'recent' && x[3] > 15)).filter(x => x[0].toLowerCase().includes(query) || x[1].toLowerCase().includes(query));
-      list = list.sort((a,b) => sort === 'name' ? a[0].localeCompare(b[0]) : sort === 'photos' ? b[3]-a[3] : images.indexOf(a)-images.indexOf(b));
-      $('#worldGrid').innerHTML = list.length ? list.map((x,i) => `<article class="world" style="animation-delay:${i*35}ms"><div class="cover"><img loading="lazy" src="${x[2]}" alt="${x[0]} world cover"><button class="favorite ${x[4]?'on':''}" aria-label="Favourite ${x[0]}">★</button><div class="cover-meta"><span>${x[1]}</span><span>${x[3]} photos</span></div></div><div class="world-info"><div><div class="world-title">${x[0]}</div><div class="world-place">${i < 3 ? 'Visited today' : 'Visited this month'}</div></div><div class="world-count">${String(x[3]).padStart(2,'0')}</div></div></article>`).join('') : '<div class="empty">No worlds match that search.</div>';
-      document.querySelectorAll('.favorite').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); btn.classList.toggle('on'); toast(btn.classList.contains('on') ? 'Added to favourites' : 'Removed from favourites'); }));
+      let list = images.filter(x => currentFilter === 'all' || (currentFilter === 'favorite' && x.favorite) || (currentFilter === 'recent' && x.lastCapture && Date.now() / 1000 - x.lastCapture < 30 * 86400)).filter(x => x.name.toLowerCase().includes(query));
+      list = list.sort((a,b) => sort === 'name' ? a.name.localeCompare(b.name) : sort === 'photos' ? b.photos.length-a.photos.length : (b.lastCapture || 0) - (a.lastCapture || 0));
+      $('#worldGrid').innerHTML = list.length ? list.map((x,i) => {
+        const cover = x.photos[0];
+        return `<article class="world" data-world="${escapeHtml(x.name)}" title="${escapeHtml(x.name)}" style="animation-delay:${i*35}ms"><div class="cover">${cover ? `<img loading="lazy" decoding="async" src="${escapeHtml(assetUrl(cover.thumbnailPath || cover.path))}" data-file-path="${escapeHtml(cover.thumbnailPath || cover.path)}" data-original-path="${escapeHtml(cover.path)}" alt="${escapeHtml(x.name)} world cover">` : '<div class="image-fallback">No photos yet</div>'}<button class="favorite ${x.favorite?'on':''}" aria-label="Favourite ${escapeHtml(x.name)}">★</button><div class="cover-meta"><span>${x.photos.length} ${x.photos.length === 1 ? 'photo' : 'photos'}</span></div></div><div class="world-info"><div><div class="world-title">${escapeHtml(x.name)}</div><div class="world-place">${formatCaptureTime(x.lastCapture)}</div></div><div class="world-count">${String(x.photos.length).padStart(2,'0')}</div></div></article>`;
+      }).join('') : '<div class="empty">No worlds match that search.</div>';
+      document.querySelectorAll('.world').forEach(card => card.addEventListener('click', () => openWorld(card.dataset.world)));
+      document.querySelectorAll('.favorite').forEach(btn => btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const world = images.find(item => item.name === btn.closest('.world').dataset.world);
+        if (!world) return;
+        world.favorite = !world.favorite;
+        localStorage.setItem(favoritesStorageKey, JSON.stringify(images.filter(item => item.favorite).map(item => item.name)));
+        btn.classList.toggle('on', world.favorite);
+        updateNavigationCounts();
+        renderCollections();
+        toast(world.favorite ? 'Added to favourites' : 'Removed from favourites');
+      }));
+      document.querySelectorAll('.cover img').forEach(img => img.addEventListener('load', () => debugLog('thumbnail_load_success', { filePath: img.dataset.filePath, url: img.currentSrc || img.src })));
+      document.querySelectorAll('.cover img').forEach(img => img.addEventListener('error', () => {
+        const original = img.dataset.originalPath;
+        debugLog('thumbnail_load_failure', { filePath: img.dataset.filePath, url: img.currentSrc || img.src });
+        debugLog('thumbnail_fallback_shown', { filePath: original || img.dataset.filePath });
+        img.replaceWith(Object.assign(document.createElement('div'), { className: 'image-fallback', textContent: 'Thumbnail unavailable' }));
+      }));
     }
+    function showView(id, crumb) {
+      document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === id));
+      $('#crumbTitle').textContent = crumb;
+      $('.content').scrollTop = 0;
+    }
+    function openWorld(name) {
+      const world = images.find(item => item.name === name);
+      if (!world) return;
+      $('#detailTitle').textContent = world.name;
+      $('#detailTitle').title = world.name;
+      $('#detailMeta').textContent = `${world.photos.length} ${world.photos.length === 1 ? 'photo' : 'photos'} · Last capture ${formatCaptureTime(world.lastCapture)}`;
+      $('#detailGrid').innerHTML = world.photos.length ? world.photos.map((photo, index) => `<article class="photo-entry" style="animation-delay:${index * 35}ms"><button class="photo-tile" data-index="${index}" aria-label="Open ${escapeHtml(world.name)} screenshot"><span class="photo-skeleton" aria-hidden="true"></span><img loading="lazy" decoding="async" src="${escapeHtml(assetUrl(photo.thumbnailPath || photo.path))}" data-file-path="${escapeHtml(photo.thumbnailPath || photo.path)}" data-original-path="${escapeHtml(photo.path)}" alt="${escapeHtml(world.name)} screenshot"><span class="photo-error" hidden>Photo unavailable</span></button><aside class="photo-meta"><div class="photo-meta-row"><span>${escapeHtml(formatCaptureTime(photo.capturedAt))}</span></div></aside></article>`).join('') : '<div class="empty">No photos found for this world.</div>';
+      document.querySelectorAll('.photo-tile').forEach(tile => tile.addEventListener('click', () => openViewer(world, Number(tile.dataset.index))));
+      document.querySelectorAll('.photo-tile img').forEach(img => {
+        img.addEventListener('load', () => { img.closest('.photo-tile').classList.add('loaded'); debugLog('detail_thumbnail_load_success', { filePath: img.dataset.filePath, url: img.currentSrc || img.src }); });
+        img.addEventListener('error', () => {
+          const original = img.dataset.originalPath;
+          debugLog('detail_thumbnail_load_failure', { filePath: img.dataset.filePath, url: img.currentSrc || img.src });
+          img.closest('.photo-tile').classList.add('loaded');
+          img.closest('.photo-tile').querySelector('.photo-error').hidden = false;
+          img.remove();
+        });
+      });
+      showView('worldDetail', world.name);
+    }
+    function timelinePhotos() {
+      return images.flatMap(world => world.photos.map(photo => ({ ...photo, worldName: photo.worldName || world.name })))
+        .sort((a, b) => (b.capturedAt || 0) - (a.capturedAt || 0));
+    }
+    function renderCollections() {
+      const favorites = images.filter(world => world.favorite);
+      const favoriteMarkup = favorites.length
+        ? favorites.map(world => {
+          const cover = world.photos[0];
+          return `<button class="collection-row" data-collection-world="${escapeHtml(world.name)}" type="button">${cover ? `<img class="collection-thumb" loading="lazy" decoding="async" src="${escapeHtml(assetUrl(cover.thumbnailPath || cover.path))}" alt="">` : '<span class="collection-thumb"></span>'}<div><strong>${escapeHtml(world.name)}</strong><small>${world.photos.length} ${world.photos.length === 1 ? 'photo' : 'photos'}</small></div><span>${escapeHtml(formatCaptureTime(world.lastCapture))}</span></button>`;
+        }).join('')
+        : '<div class="empty">Favourite a world in Library to add it here.</div>';
+      const customCollections = readStoredJson(collectionsStorageKey, []);
+      const customMarkup = customCollections.length ? `<div class="collection-custom">${customCollections.map(collection => {
+        collection.worlds = Array.isArray(collection.worlds) ? collection.worlds : [];
+        const photoCount = Array.isArray(collection.photos) ? collection.photos.length : 0;
+        return `<div class="collection-custom-head"><strong>${escapeHtml(collection.name)}<span class="collection-photo-count">${photoCount} copied photo${photoCount === 1 ? '' : 's'}</span></strong><button class="btn" type="button" data-collection-picker="${escapeHtml(collection.name)}">Add photos</button><button class="btn" type="button" data-collection-refresh="${escapeHtml(collection.name)}">Add favourites</button></div><div class="collection-custom-worlds">${collection.worlds.length ? collection.worlds.map(escapeHtml).join(' · ') : 'No worlds yet — favourite worlds, then add them here.'}</div></div>`;
+      }).join('')}</div>` : '';
+      $('#collectionsList').innerHTML = `<div class="collection-section"><div class="section-title"><h2>Favourites</h2></div>${favoriteMarkup}</div>${customMarkup}`;
+      document.querySelectorAll('[data-collection-world]').forEach(row => row.addEventListener('click', () => openWorld(row.dataset.collectionWorld)));
+      document.querySelectorAll('[data-collection-refresh]').forEach(button => button.addEventListener('click', () => {
+        const collections = readStoredJson(collectionsStorageKey, []);
+        const collection = collections.find(item => item.name === button.dataset.collectionRefresh);
+        if (!collection) return;
+        collection.worlds = [...new Set([...collection.worlds, ...favorites.map(world => world.name)])];
+        localStorage.setItem(collectionsStorageKey, JSON.stringify(collections));
+        renderCollections();
+        toast(`Added ${favorites.length} favourite${favorites.length === 1 ? '' : 's'} to ${collection.name}`);
+      }));
+      document.querySelectorAll('[data-collection-picker]').forEach(button => button.addEventListener('click', () => openCollectionPicker(button.dataset.collectionPicker)));
+    }
+    function allCollectionPhotos() {
+      return images.flatMap(world => world.photos.map(photo => ({ ...photo, worldName: photo.worldName || world.name })));
+    }
+    function openCollectionPicker(collectionName) {
+      const collections = readStoredJson(collectionsStorageKey, []);
+      const collection = collections.find(item => item.name === collectionName);
+      if (!collection) return;
+      collectionPickerState = { collectionName, selected: new Set(Array.isArray(collection.photos) ? collection.photos : []) };
+      const photos = allCollectionPhotos();
+      $('#collectionPickerTitle').textContent = `Add photos to ${collectionName}`;
+      $('#collectionPickerDescription').textContent = 'Selected screenshots will be copied into a folder named after this collection.';
+      $('#collectionPhotoGrid').innerHTML = photos.length ? photos.map((photo, index) => `<label class="collection-photo-option"><input type="checkbox" data-collection-photo-index="${index}" ${collectionPickerState.selected.has(photo.path) ? 'checked' : ''}><img loading="lazy" decoding="async" src="${escapeHtml(assetUrl(photo.thumbnailPath || photo.path))}" alt=""><span>${escapeHtml(photo.worldName)} · ${escapeHtml(formatCaptureTime(photo.capturedAt))}</span></label>`).join('') : '<div class="empty">No screenshots are available yet. Run a scan first.</div>';
+      $('#collectionPicker').hidden = false;
+      $('#collectionPickerClose').focus();
+    }
+    function closeCollectionPicker() {
+      $('#collectionPicker').hidden = true;
+      collectionPickerState = null;
+    }
+    async function saveCollectionPhotos() {
+      if (!collectionPickerState) return;
+      const photos = allCollectionPhotos();
+      const selectedPaths = [...document.querySelectorAll('[data-collection-photo-index]:checked')].map(input => photos[Number(input.dataset.collectionPhotoIndex)]?.path).filter(Boolean);
+      if (!selectedPaths.length) { toast('Select at least one photo'); return; }
+      if (!await confirmFileChanges()) return;
+      const button = $('#collectionPickerSave');
+      button.disabled = true;
+      button.textContent = 'Copying…';
+      try {
+        const copied = await invoke('add_photos_to_collection', { folderPath: $('#folderPath').textContent, collectionName: collectionPickerState.collectionName, photoPaths: selectedPaths });
+        const collections = readStoredJson(collectionsStorageKey, []);
+        const collection = collections.find(item => item.name === collectionPickerState.collectionName);
+        if (collection) {
+          collection.photos = [...new Set([...(collection.photos || []), ...selectedPaths])];
+          localStorage.setItem(collectionsStorageKey, JSON.stringify(collections));
+        }
+        const collectionName = collectionPickerState.collectionName;
+        closeCollectionPicker();
+        renderCollections();
+        toast(`${copied} photo${copied === 1 ? '' : 's'} copied to ${collectionName}`);
+      } catch (error) {
+        toast(`Photos could not be added: ${String(error)}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Copy selected photos';
+      }
+    }
+    function timelineHeading(timestamp) {
+      const date = new Date((timestamp || 0) * 1000);
+      const today = new Date();
+      const start = value => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+      const age = Math.round((start(today) - start(date)) / 86400000);
+      return age === 0 ? 'Today' : age === 1 ? 'Yesterday' : new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+    }
+    function openTimelineViewer(index) {
+      const photos = timelinePhotos();
+      if (photos[index]) openViewer({ name: photos[index].worldName, photos }, index);
+    }
+    function renderTimeline() {
+      const photos = timelinePhotos();
+      if (!photos.length) {
+        $('#timelineList').innerHTML = '<div class="empty">No screenshots yet. Scan your selected folder to build your timeline.</div>';
+        return;
+      }
+      const groups = [];
+      photos.forEach((photo, index) => {
+        const heading = timelineHeading(photo.capturedAt);
+        let group = groups.at(-1);
+        if (!group || group.heading !== heading) { group = { heading, photos: [] }; groups.push(group); }
+        group.photos.push({ photo, index });
+      });
+      $('#timelineList').innerHTML = groups.map(group => `<section class="day"><div class="day-date"><strong>${group.heading}</strong><span>${group.photos.length} ${group.photos.length === 1 ? 'photo' : 'photos'}</span></div><div class="photo-row">${group.photos.map(({ photo, index }) => `<button class="photo-tile" data-timeline-index="${index}" aria-label="Open ${escapeHtml(photo.worldName || 'screenshot')} screenshot"><img loading="lazy" decoding="async" src="${escapeHtml(assetUrl(photo.thumbnailPath || photo.path))}" data-file-path="${escapeHtml(photo.thumbnailPath || photo.path)}" data-original-path="${escapeHtml(photo.path)}" alt="${escapeHtml(photo.worldName || 'screenshot')} screenshot"><span class="photo-timeline-meta">${escapeHtml(photo.worldName || 'Unknown world')} · ${escapeHtml(formatCaptureTime(photo.capturedAt).split(', ').pop() || '—')}</span><span class="photo-error" hidden>Photo unavailable</span></button>`).join('')}</div></section>`).join('');
+      document.querySelectorAll('[data-timeline-index]').forEach(tile => tile.addEventListener('click', () => openTimelineViewer(Number(tile.dataset.timelineIndex))));
+      document.querySelectorAll('[data-timeline-index] img').forEach(img => img.addEventListener('error', () => {
+        const original = img.dataset.originalPath;
+        debugLog('timeline_thumbnail_load_failure', { filePath: img.dataset.filePath, url: img.currentSrc || img.src });
+        debugLog('timeline_fallback_shown', { filePath: original || img.dataset.filePath });
+        img.closest('.photo-tile').querySelector('.photo-error').hidden = false;
+        img.remove();
+      }));
+    }
+    function renderViewerPhoto() {
+      if (!viewerState) return;
+      const photo = viewerState.photos[viewerState.index];
+      const url = assetUrl(photo.path);
+      $('#lightboxCounter').textContent = `${viewerState.index + 1} / ${viewerState.photos.length}`;
+      $('#lightboxWorld').textContent = photo.worldName || viewerState.world.name;
+      $('#lightboxTime').textContent = formatCaptureTime(photo.capturedAt);
+      const players = Array.isArray(photo.participants) ? photo.participants : [];
+      $('#lightboxPlayerCount').textContent = players.length ? String(players.length) : 'No player data';
+      $('#lightboxPlayers').innerHTML = players.length ? players.map(player => `<span class="photo-person">${escapeHtml(player)}</span>`).join('') : '<span class="photo-meta-empty">No player data</span>';
+      $('#lightboxError').hidden = true;
+      $('#lightboxImage').hidden = false;
+      $('#lightboxImage').alt = `${viewerState.world.name} screenshot`;
+      $('#lightboxImage').src = '';
+      $('#lightboxImage').src = url;
+      $('#lightboxImage').onload = () => debugLog('viewer_load_success', { filePath: photo.path, url });
+      $('#lightboxImage').onerror = () => { debugLog('viewer_load_failure', { filePath: photo.path, url }); $('#lightboxImage').hidden = true; $('#lightboxError').hidden = false; };
+      if (viewerState.photos[viewerState.index - 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index - 1].path);
+      if (viewerState.photos[viewerState.index + 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index + 1].path);
+    }
+    function openViewer(world, index) { viewerState = { world, photos: world.photos, index }; $('#lightbox').hidden = false; renderViewerPhoto(); }
+    function closeViewer() { $('#lightbox').hidden = true; viewerState = null; }
+    function moveViewer(step) { if (!viewerState) return; viewerState.index = (viewerState.index + step + viewerState.photos.length) % viewerState.photos.length; renderViewerPhoto(); }
     function updateNavigationCounts() {
       $('#libraryNavCount').textContent = String(images.length);
-      $('#collectionsNavCount').textContent = '0';
-      $('#photoTotal').textContent = String(images.reduce((total, image) => total + (Number(image[3]) || 0), 0));
+      $('#collectionsNavCount').textContent = String(images.filter(image => image.favorite).length);
+      $('#photoTotal').textContent = String(images.reduce((total, image) => total + image.photos.length, 0));
       $('#worldTotal').textContent = String(images.length);
+      const newest = images.reduce((latest, image) => Math.max(latest, image.lastCapture || 0), 0);
+      $('#lastCapture').textContent = newest ? formatCaptureTime(newest) : '—';
     }
-    function renderTimeline() { $('#timelineList').innerHTML = '<div class="empty">No screenshots yet. Scan your selected folder to build your timeline.</div>'; }
+    function selectNavigation(view) {
+      document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+    }
+    $('#backToLibrary').addEventListener('click', () => { showView('library', 'Library'); selectNavigation('library'); });
+    $('#closeLightbox').addEventListener('click', closeViewer);
+    $('#previousPhoto').addEventListener('click', () => moveViewer(-1));
+    $('#nextPhoto').addEventListener('click', () => moveViewer(1));
+    $('#openPhotoLocation').addEventListener('click', async () => { if (!viewerState) return; try { await invoke('open_photo_location', { path: viewerState.photos[viewerState.index].path }); toast('Location opened'); } catch (error) { toast(`Could not open location: ${String(error)}`); } });
+    $('#copyPhotoPath').addEventListener('click', async () => { if (!viewerState) return; try { await invoke('copy_photo_path', { path: viewerState.photos[viewerState.index].path }); toast('Copied'); } catch (error) { toast(`Could not copy path: ${String(error)}`); } });
+    $('#lightbox').addEventListener('click', event => { if (event.target.id === 'lightbox') closeViewer(); });
+    document.addEventListener('keydown', event => { if (!viewerState) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
     function setWatching(next) { watching = next; $('#watchPulse').classList.toggle('live', watching); $('#watchLabel').textContent = watching ? 'Watcher is live' : 'Watcher paused'; $('#watchCopy').textContent = watching ? 'New captures will be organized automatically.' : 'New screenshots are waiting for you.'; $('#watchToggle').textContent = watching ? 'Pause watching →' : 'Start watching →'; $('#watchMain').textContent = watching ? 'Watching now' : 'Start watching'; $('#automationToggle').textContent = watching ? 'Pause watching' : 'Start watching'; $('#automationStatus').textContent = watching ? 'Watcher is active.' : 'Watcher is paused.'; $('#watchSwitch').classList.toggle('on', watching); }
-    document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const view = btn.dataset.view; document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; }));
+    document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { selectNavigation(btn.dataset.view); const view = btn.dataset.view; document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; if (view === 'timeline') renderTimeline(); if (view === 'collections') renderCollections(); if (view === 'activity') refreshActivity(); }));
     let searchRenderTimer;
     $('#search').addEventListener('input', () => {
       clearTimeout(searchRenderTimer);
       searchRenderTimer = setTimeout(renderWorlds, 120);
     });
-    $('#sort').addEventListener('change', renderWorlds); $('#refresh').addEventListener('click', () => { renderWorlds(); toast('Library refreshed'); });
+    $('#sort').addEventListener('change', renderWorlds);     $('#refresh').addEventListener('click', async () => { await refreshLibrary(); toast('Library refreshed'); });
+    $('#scanAllMonthsSwitch').addEventListener('click', () => { setScanAllMonths(!scanAllMonthsEnabled()); refreshLibrary(); });
     document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active')); btn.classList.add('active'); currentFilter = btn.dataset.filter; renderWorlds(); }));
     $('#nameForm').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -507,6 +1013,7 @@
       toast(`Nice to meet you, ${name}`);
     });
     $('#editName').addEventListener('click', openNameOnboarding);
+    $('#debugToggle').addEventListener('click', () => { localStorage.setItem(debugStorageKey, String(!debugEnabled())); updateDebugToggle(); toast(`Media diagnostics ${debugEnabled() ? 'enabled' : 'disabled'}`); });
     document.querySelectorAll('.theme-swatch').forEach(button => button.addEventListener('click', () => saveTheme(themes[button.dataset.theme], button.dataset.theme)));
     $('#customTheme').addEventListener('input', event => saveTheme(event.target.value, 'custom'));
     $('#onboardingInfoBack').addEventListener('click', () => setOnboardingStep(1));
@@ -517,32 +1024,87 @@
     $('#onboardingScan').addEventListener('click', scanFromOnboarding);
     ['#settingsChooseFolder', '#automationChooseFolder', '#onboardingChooseFolder'].forEach(selector => $(selector).addEventListener('click', chooseFolder));
     ['#settingsAutoLocate', '#automationAutoLocate', '#onboardingAutoLocate'].forEach(selector => $(selector).addEventListener('click', autoLocateFolder));
-    ['#watchToggle','#watchMain','#automationToggle','#watchSwitch'].forEach(s => $(s).addEventListener('click', async () => { const next = !watching; try { if (next) await invoke('start_watching',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'}); else await invoke('stop_watching'); setWatching(next); toast(next ? 'Watching for new screenshots' : 'Watcher paused'); } catch (error) { toast(`Watcher could not be changed: ${String(error)}`); } }));
+    ['#watchToggle','#watchMain','#automationToggle','#watchSwitch'].forEach(s => $(s).addEventListener('click', async () => { const next = !watching; if (next && !await confirmFileChanges()) return; try { if (next) await invoke('start_watching',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:scanAllMonthsEnabled(),singleFolder:false,template:'{world}'}); else await invoke('stop_watching'); setWatching(next); toast(next ? 'Watching for new screenshots' : 'Watcher paused'); } catch (error) { toast(`Watcher could not be changed: ${String(error)}`); } }));
     $('#scan').addEventListener('click', async () => {
       const button = $('#scan');
-      if (button.disabled) return;
+      if (scanInFlight) return;
+      if (!await confirmFileChanges()) return;
+      scanInFlight = true;
       button.disabled = true;
       button.textContent = 'Scanning…';
       try {
-        const result = await invoke('organize_folder',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'});
-        if (result?.organized) toast(`${result.organized} screenshots organized`); else toast('Scan complete');
-        renderWorlds();
+        const result = await invoke('organize_folder',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:scanAllMonthsEnabled(),singleFolder:false,template:'{world}'});
+        if (result?.errors) toast(`Scan completed with ${result.errors} error(s)`); else if (result?.organized) toast(`${result.organized} screenshots organized`); else toast('Scan complete');
+        await refreshLibrary();
       } catch (error) {
         toast(`Scan could not be completed: ${String(error)}`);
       } finally {
+        scanInFlight = false;
         button.disabled = false;
         button.textContent = 'Scan folder';
       }
     });
-    $('#simulate').addEventListener('click', async () => { try { const result = await invoke('simulate_folder',{folderPath:$('#folderPath').textContent,scanAllMonths:true,singleFolder:false,template:'{world}'}); const preview = result?.preview || []; $('#previewPanel').textContent = preview.length ? preview.join('\n\n') : 'No changes planned.'; $('#previewPanel').style.display = 'block'; toast(`Preview: ${result?.organized || 0} screenshots would be organized; no files changed`); } catch (error) { toast(`Preview could not be completed: ${String(error)}`); } });
-    $('#undo').addEventListener('click', async () => { try { const result = await invoke('undo_last_run',{folderPath:$('#folderPath').textContent}); toast(`${result?.undone || 0} files restored`); renderWorlds(); } catch (error) { toast(`Undo could not be completed: ${String(error)}`); } });
+    $('#scanAll').addEventListener('click', async () => {
+      const button = $('#scanAll');
+      if (scanInFlight || !await confirmFileChanges({ longScan: true })) return;
+      scanInFlight = true;
+      button.disabled = true;
+      button.textContent = 'Scanning all…';
+      try {
+        const result = await invoke('organize_folder',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'});
+        if (result?.errors) toast(`Full scan completed with ${result.errors} error(s)`); else if (result?.organized) toast(`${result.organized} screenshots organized`); else toast('Full scan complete');
+        await refreshLibrary();
+      } catch (error) {
+        toast(`Full scan could not be completed: ${String(error)}`);
+      } finally {
+        scanInFlight = false;
+        button.disabled = false;
+        button.textContent = 'Scan all (may take some time)';
+      }
+    });
+    $('#simulate').addEventListener('click', async () => { try { const result = await invoke('simulate_folder',{folderPath:$('#folderPath').textContent,scanAllMonths:scanAllMonthsEnabled(),singleFolder:false,template:'{world}'}); const preview = result?.preview || []; $('#previewPanel').textContent = preview.length ? preview.join('\n\n') : 'No changes planned.'; $('#previewPanel').style.display = 'block'; toast(`Preview: ${result?.organized || 0} screenshots would be organized; no files changed`); } catch (error) { toast(`Preview could not be completed: ${String(error)}`); } });
+    $('#undo').addEventListener('click', async () => { if (!await confirmFileChanges()) return; try { const result = await invoke('undo_last_run',{folderPath:$('#folderPath').textContent}); toast(`${result?.undone || 0} files restored`);     await refreshLibrary(); } catch (error) { toast(`Undo could not be completed: ${String(error)}`); } });
+    $('#collectionForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const input = $('#collectionName');
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      let collections = [];
+      try { collections = JSON.parse(localStorage.getItem(collectionsStorageKey) || '[]'); } catch (error) { toast(`Collections could not be loaded: ${String(error)}`); return; }
+      if (collections.some(collection => collection.name.toLowerCase() === name.toLowerCase())) { toast('A collection with that name already exists'); return; }
+      collections.push({ name, worlds: images.filter(world => world.favorite).map(world => world.name), photos: [] });
+      localStorage.setItem(collectionsStorageKey, JSON.stringify(collections));
+      input.value = '';
+      renderCollections();
+      toast(`Collection created: ${name}`);
+    });
+    $('#collectionPickerClose').addEventListener('click', closeCollectionPicker);
+    $('#collectionPickerCancel').addEventListener('click', closeCollectionPicker);
+    $('#collectionPickerSave').addEventListener('click', saveCollectionPhotos);
+    $('#collectionPicker').addEventListener('click', event => { if (event.target.id === 'collectionPicker') closeCollectionPicker(); });
+    $('#toggleTerminal').addEventListener('click', () => {
+      const terminal = $('#activityTerminal');
+      const visible = terminal.hidden;
+      terminal.hidden = !visible;
+      $('#toggleTerminal').textContent = visible ? 'Hide log terminal' : 'Show log terminal';
+      $('#toggleTerminal').setAttribute('aria-expanded', String(visible));
+      if (visible) $('#activityTerminalOutput').scrollTop = $('#activityTerminalOutput').scrollHeight;
+    });
+    $('#clearTerminal').addEventListener('click', () => {
+      terminalHasHistory = false;
+      $('#activityTerminalOutput').innerHTML = '<span class="activity-terminal-line"><span class="terminal-time">--:--:--</span> <span class="terminal-level">INFO</span> Terminal cleared.</span>';
+    });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); $('#undo').click(); } if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); $('#search').focus(); } });
-    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); const state = await invoke('is_watching'); setWatching(Boolean(state)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); renderWorlds(); renderTimeline(); }
+    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); setScanAllMonths(scanAllMonthsEnabled()); const state = await invoke('is_watching'); setWatching(Boolean(state)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); await refreshLibrary(); }
     loadTheme();
+    updateDebugToggle();
     updateWelcome();
     setInterval(updateWelcome, 60000);
     setInterval(() => { refreshVrChatStatus(); if (vrchatStartedAt) $('#vrchatDuration').textContent = `Open for ${formatDuration(Date.now() / 1000 - vrchatStartedAt)}`; }, 5000);
-    listen('watch-organized', () => { toast('New screenshot organized'); renderWorlds(); }); listen('watch-error', e => toast(e?.payload?.error || 'Watcher error')); boot();
+    listen('watch-organized', event => { const stats = event?.payload?.stats; appendTerminalLine('success', `Watcher organized ${stats?.organized || 1} file(s)`); toast('New screenshot organized'); refreshLibrary(); });
+    listen('watch-initial-scan', event => { if (event?.payload?.error) { appendTerminalLine('error', `Initial scan failed: ${event.payload.error}`); toast(`Initial scan failed: ${event.payload.error}`); } else { appendTerminalLine('success', 'Watcher initial scan completed'); refreshLibrary(); } });
+    listen('watch-status', event => { const status = event?.payload?.status || 'status'; appendTerminalLine('info', `Watcher ${status}`); });
+    listen('watch-error', e => { appendTerminalLine('error', e?.payload?.error || 'Watcher error'); toast(e?.payload?.error || 'Watcher error'); }); boot();
   </script>
 </body>
 </html>

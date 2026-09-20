@@ -1,7 +1,7 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use organizer_core::{
-    organize_path, organize_single_file, read_activity_log, undo_organization, validate_template,
-    ActivityEntry, OrganizerConfig, OrganizerStats,
+    organize_path, organize_single_file, read_activity_log, scan_library_with_options,
+    undo_organization, validate_template, ActivityEntry, OrganizerConfig, OrganizerStats,
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -82,6 +82,19 @@ fn get_activity(folder_path: String) -> Result<Vec<ActivityEntry>, String> {
 }
 
 #[tauri::command]
+async fn get_library(folder_path: String, scan_all_months: bool) -> Result<OrganizerStats, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let expanded = shellexpand::tilde(&folder_path)
+            .to_string()
+            .replace('\\', "/");
+        scan_library_with_options(&PathBuf::from(expanded), scan_all_months)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| format!("library scan task failed: {err}"))?
+}
+
+#[tauri::command]
 async fn undo_last_run(folder_path: String) -> Result<OrganizerStats, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let expanded = shellexpand::tilde(&folder_path).to_string();
@@ -103,16 +116,17 @@ fn get_default_path() -> String {
     let candidates = if cfg!(target_os = "windows") {
         let userprofile =
             std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-        vec![format!(
-            "{}/Pictures/VRChat/VRChat",
-            userprofile.replace('\\', "/")
-        )]
+        vec![
+            format!("{}/Pictures/VRChat", userprofile.replace('\\', "/")),
+            format!("{}/Pictures/VRChat/VRChat", userprofile.replace('\\', "/")),
+        ]
     } else {
         // Linux / Steam Proton paths
         vec![
-      format!("{}/Pictures/VRChat/VRChat", home),
-      format!("{}/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/Pictures/VRChat/VRChat", home),
-    ]
+            format!("{}/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/Pictures/VRChat", home),
+            format!("{}/Pictures/VRChat", home),
+            format!("{}/Pictures/VRChat/VRChat", home),
+        ]
     };
 
     // Return the first path that actually exists
@@ -128,6 +142,127 @@ fn get_default_path() -> String {
         .into_iter()
         .next()
         .unwrap_or_else(|| format!("{home}/Pictures/VRChat/VRChat"))
+}
+
+#[tauri::command]
+fn log_frontend_diagnostic(
+    folder_path: String,
+    level: String,
+    event: String,
+    details: String,
+) -> Result<(), String> {
+    let expanded = shellexpand::tilde(&folder_path).to_string();
+    organizer_core::log_diagnostic(
+        &PathBuf::from(expanded),
+        &level,
+        &format!("frontend_{event}"),
+        &details,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_photo_location(path: String) -> Result<(), String> {
+    let photo = PathBuf::from(&path);
+    if !photo.is_file() {
+        return Err(format!("photo does not exist: {}", photo.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer.exe")
+        .args(["/select,", &path])
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open")
+        .arg(photo.parent().unwrap_or(&photo))
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(photo.parent().unwrap_or(&photo))
+        .spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| format!("could not open photo location: {error}"))
+}
+
+#[tauri::command]
+fn copy_photo_path(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("photo does not exist: {path}"));
+    }
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|error| format!("could not access clipboard: {error}"))?;
+    clipboard
+        .set_text(path)
+        .map_err(|error| format!("could not copy photo path: {error}"))
+}
+
+#[tauri::command]
+async fn add_photos_to_collection(
+    folder_path: String,
+    collection_name: String,
+    photo_paths: Vec<String>,
+) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let expanded_folder = shellexpand::tilde(&folder_path).to_string();
+        let base_path = std::fs::canonicalize(&expanded_folder)
+            .map_err(|error| format!("screenshot folder is not accessible: {error}"))?;
+        let collection_name = collection_name.trim();
+        if collection_name.is_empty()
+            || collection_name == "."
+            || collection_name == ".."
+            || collection_name.contains('/')
+            || collection_name.contains('\\')
+        {
+            return Err("collection name contains invalid path characters".to_string());
+        }
+
+        let destination = base_path.join(collection_name);
+        std::fs::create_dir_all(&destination)
+            .map_err(|error| format!("could not create collection folder: {error}"))?;
+        let mut copied = 0;
+        for source_string in photo_paths {
+            let source = std::fs::canonicalize(&source_string)
+                .map_err(|error| format!("photo is not accessible: {source_string}: {error}"))?;
+            if !source.starts_with(&base_path) || !source.is_file() {
+                return Err(format!(
+                    "photo is outside the selected screenshot folder: {source_string}"
+                ));
+            }
+            let file_name = source
+                .file_name()
+                .ok_or_else(|| format!("photo has no file name: {source_string}"))?;
+            let mut target = destination.join(file_name);
+            if target.exists() {
+                let stem = target
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("photo")
+                    .to_string();
+                let extension = target
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut suffix = 2;
+                while target.exists() {
+                    let name = if extension.is_empty() {
+                        format!("{stem} ({suffix})")
+                    } else {
+                        format!("{stem} ({suffix}).{extension}")
+                    };
+                    target = destination.join(name);
+                    suffix += 1;
+                }
+            }
+            std::fs::copy(&source, &target)
+                .map_err(|error| format!("could not copy {}: {error}", source.display()))?;
+            copied += 1;
+        }
+        Ok(copied)
+    })
+    .await
+    .map_err(|error| format!("collection copy task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -499,7 +634,12 @@ pub fn run() {
             organize_folder,
             simulate_folder,
             get_activity,
+            get_library,
             get_default_path,
+            log_frontend_diagnostic,
+            open_photo_location,
+            copy_photo_path,
+            add_photos_to_collection,
             validate_folder,
             undo_last_run,
             has_undo,

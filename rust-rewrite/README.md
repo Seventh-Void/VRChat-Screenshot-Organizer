@@ -61,7 +61,7 @@ Arguments:
 
 Environment Variables:
   VRCHAT_DRY_RUN          Enable dry-run mode
-  VRCHAT_SCAN_ALL_MONTHS  Scan all month folders
+  VRCHAT_SCAN_ALL_MONTHS  Scan all month folders instead of only the latest
   VRCHAT_SINGLE_FOLDER    Treat path as a single folder
 ```
 
@@ -103,7 +103,7 @@ cd rust-rewrite
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
-`release/v2.0.0/` (with the version read from Cargo metadata).
+`release/v2.0.1/` (with the version read from Cargo metadata).
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
 The Windows cross-compilation helper uses the same versioned release directory:
@@ -112,7 +112,7 @@ The Windows cross-compilation helper uses the same versioned release directory:
 ./build-windows.sh
 ```
 
-It produces `release/v2.0.0/VRChatOrganizer-2.0.0-windows-x86_64.exe` and
+It produces `release/v2.0.1/VRChatOrganizer-2.0.1-windows-x86_64.exe` and
 updates `SHA256SUMS` for all generated release binaries.
 
 For a local development cycle:
@@ -141,3 +141,6 @@ cargo build --workspace --release
 - **Activity diagnostics:** completed scans and simulations append bounded,
   atomic records to `.vrchat-organizer-activity.json` in the selected library.
   Records include status, duration, file counts, and a compact summary.
+- **Detailed troubleshooting:** `.vrchat-organizer.log` is a line-oriented
+  diagnostic log containing scan mode, start/end times, durations, counts, and
+  file-level failures. Attach it when reporting a problem.

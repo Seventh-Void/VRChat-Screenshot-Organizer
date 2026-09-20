@@ -71,7 +71,7 @@ fi
 
 if [ -n "$APPIMAGETOOL" ]; then
   "$APPIMAGETOOL" "$APPDIR" "${RELEASE_DIR}/${APPIMAGE_NAME}"
-  sha256sum "${RELEASE_DIR}/${APPIMAGE_NAME}" > "${RELEASE_DIR}/SHA256SUMS"
+  (cd "$RELEASE_DIR" && sha256sum "$APPIMAGE_NAME") > "${RELEASE_DIR}/SHA256SUMS"
   echo "✅ AppImage created at: ${RELEASE_DIR}/${APPIMAGE_NAME}"
 else
   echo "appimagetool is required to create a release AppImage." >&2

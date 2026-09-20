@@ -13,9 +13,10 @@ rust-rewrite/src-tauri/gen/
 VRChatOrganizer.AppDir/
 *.msi
 *.exe
-/release/v2.0.0/*
-!/release/v2.0.0/README.md
-!/release/v2.0.0/.gitkeep
+release/*/*
+!release/*/
+!release/*/README.md
+!release/*/SHA256SUMS
 
 # Logs
 *.log
