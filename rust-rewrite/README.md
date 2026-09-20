@@ -23,7 +23,15 @@ Metadata (world name, software) is extracted **without any external dependencies
   - `tEXt`, `zTXt` (zlib-compressed), `iTXt` (UTF-8) chunks
   - Keywords: `Description`, `Comment` — JSON containing world metadata
   - Keywords: `Software`, `Creator Tool` — software name
+  - `VRChat Organizer Participants` — names added from the image viewer
 - **WebP** — Dimensions only (no EXIF/text chunk metadata supported yet)
+
+When a screenshot is open in the viewer, right-click the image to search for a
+player and save an explicit in-frame tag. World metadata participants remain
+available as general capture metadata, while the People view and tagged count
+use only these explicit image tags. Tags are embedded in PNG metadata without
+re-encoding the image. JPEG and WebP screenshots can still be viewed, but
+embedded participant tagging currently supports PNG screenshots only.
 
 ## Library classification
 
@@ -130,7 +138,7 @@ cd rust-rewrite
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
-`release/v2.0.2/` (with the version read from Cargo metadata).
+`release/v2.1.0/` (with the version read from Cargo metadata).
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
 The Windows cross-compilation helper uses the same versioned release directory:
@@ -139,7 +147,7 @@ The Windows cross-compilation helper uses the same versioned release directory:
 ./build-windows.sh
 ```
 
-It produces `release/v2.0.2/VRChatOrganizer-2.0.2-windows-x86_64.exe` and
+It produces `release/v2.1.0/VRChatOrganizer-2.1.0-windows-x86_64.exe` and
 updates `SHA256SUMS` for all generated release binaries.
 This is the standalone Windows CLI executable; the Tauri GUI executable and
 NSIS/MSI installers must be built natively on Windows or by the Windows CI

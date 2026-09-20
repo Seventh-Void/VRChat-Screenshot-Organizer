@@ -279,6 +279,8 @@
     .photo-tile:hover { transform:translateY(-2px); border-color:var(--accent); }
     .photo-tile img { width:100%; height:100%; object-fit:cover; display:block; }
     .photo-tile:focus-visible { outline:2px solid var(--accent-bright); outline-offset:3px; }
+    #worldGrid { transition:opacity .18s ease; }
+    #worldGrid.refreshing { opacity:.72; }
     .photo-meta { padding:8px 2px 0; color:var(--muted); font-size:11px; }
     .photo-meta-row { display:flex; gap:7px; align-items:center; }
     .photo-meta-row strong { color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -298,13 +300,23 @@
     .lightbox-panel p { color:var(--muted); margin:0 0 16px; }
     .lightbox-players { display:flex; flex-wrap:wrap; gap:5px; margin:9px 0 20px; }
     .photo-person { color:var(--ink); background:var(--accent-soft); border:1px solid var(--line); border-radius:5px; padding:4px 7px; font-size:10px; }
+    .lightbox-tag-hint { color:var(--faint); font-size:11px; line-height:1.4; margin:0 0 16px; }
+    .tag-menu { position:fixed; z-index:40; width:min(290px,calc(100vw - 24px)); padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:0 18px 50px rgba(0,0,0,.45); }
+    .tag-menu[hidden] { display:none; }
+    .tag-menu strong { display:block; margin-bottom:8px; font-size:12px; }
+    .tag-menu input { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:7px; background:var(--surface-2); color:var(--ink); padding:8px 9px; outline:none; }
+    .tag-menu input:focus { border-color:var(--accent); }
+    .tag-suggestions { display:grid; gap:3px; max-height:150px; overflow:auto; margin:7px 0; }
+    .tag-suggestion { border:0; border-radius:5px; background:transparent; color:var(--muted); padding:6px 7px; text-align:left; cursor:pointer; }
+    .tag-suggestion:hover, .tag-suggestion:focus-visible { background:var(--accent-soft); color:var(--ink); outline:none; }
+    .tag-menu-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
     .lightbox-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .lightbox-nav { position:absolute; inset:0; display:flex; align-items:center; justify-content:space-between; pointer-events:none; padding:0 8px; }
     .lightbox-nav button { pointer-events:auto; width:42px; height:42px; border-radius:50%; background:rgba(33,32,39,.82); }
     .lightbox-counter { position:absolute; left:34px; top:20px; color:var(--ink); font-size:12px; z-index:1; }
     .lightbox-close { position:absolute; top:14px; right:24px; z-index:1; }
     @keyframes lightbox-in { from { opacity:0; } to { opacity:1; } }
-    .toast { position:fixed; bottom:20px; right:24px; padding:12px 15px; background:#2f2c47; border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:0 12px 30px rgba(14,13,20,.5); transform:translateY(15px); opacity:0; pointer-events:none; transition:.25s; }
+    .toast { position:fixed; bottom:20px; right:24px; max-width:min(420px,calc(100vw - 48px)); white-space:pre-line; padding:12px 15px; background:#2f2c47; border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:0 12px 30px rgba(14,13,20,.5); transform:translateY(15px); opacity:0; pointer-events:none; transition:.25s; }
     .toast.show { transform:none; opacity:1; }
     .change-warning { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:24px; background:rgba(14,13,20,.8); backdrop-filter:blur(12px); }
     .change-warning[hidden] { display:none; }
@@ -433,11 +445,12 @@
         <section class="view" id="storage"><div class="eyebrow">Storage</div><h1>Know what your library uses.</h1><p class="intro">A quick view of disk usage, image sizes, and the resolutions in your collection.</p><div class="storage-layout"><div><div class="storage-total"><strong id="storageTotal">0 B</strong><span id="storageTotalMeta">Across 0 screenshots</span></div><div class="section-title"><h2>By resolution</h2><p>Sorted by usage</p></div><div class="storage-bars" id="storageBars"></div></div><aside class="storage-side"><h2>Library snapshot</h2><p>Based on the latest scan of your selected folder.</p><div class="storage-stat-list"><div class="storage-stat"><span>Screenshots</span><strong id="storagePhotoCount">0</strong></div><div class="storage-stat"><span>Worlds</span><strong id="storageWorldCount">0</strong></div><div class="storage-stat"><span>People tagged</span><strong id="storagePeopleCount">0</strong></div></div></aside></div></section>
         <section class="view" id="activity"><div class="eyebrow">Activity</div><h1>Everything Organizer has done.</h1><p class="intro" style="margin-bottom:22px">Review scans, moves, restores, and warnings with clear file counts and timings.</p><div class="activity-toolbar"><p id="activityUpdated">No activity recorded yet.</p><button class="btn" id="toggleTerminal" type="button" aria-expanded="false">Show log terminal</button></div><div class="activity-summary"><div class="activity-stat"><strong id="activityRuns">0</strong><span>operations</span></div><div class="activity-stat"><strong id="activityFiles">0</strong><span>files affected</span></div><div class="activity-stat"><strong id="activityWarnings">0</strong><span>warnings</span></div></div><div class="activity-list" id="activityList"><div class="empty">No activity yet. Run a scan to get started.</div></div><div class="activity-terminal" id="activityTerminal" hidden><div class="activity-terminal-head"><i></i><span>Live activity log</span><button class="text-btn" id="clearTerminal" type="button">Clear</button></div><div class="activity-terminal-output" id="activityTerminalOutput"><span class="activity-terminal-line"><span class="terminal-time">--:--:--</span> <span class="terminal-level">INFO</span> Waiting for activity…</span></div></div></section>
         <section class="view" id="automation"><div class="eyebrow">Automation</div><h1>Let the library keep up.</h1><p class="intro" style="margin-bottom:20px">Organizer can quietly sort new captures while you stay in VR.</p><div class="automation-grid"><div><div class="automation-hero"><h2 id="automationStatus">Watcher is paused.</h2><p>When active, new screenshots are detected and moved into their world folder as soon as they appear.</p><button class="btn primary" id="automationToggle">Start watching</button></div><div class="toggle-row"><div><strong>Watch for new screenshots</strong><small>Organize captures as they arrive</small></div><button class="toggle" id="watchSwitch"><i></i></button></div><div class="toggle-row"><div><strong>Scan all month folders</strong><small>Off by default; enable only for a full historical scan</small></div><button class="toggle" id="scanAllMonthsSwitch" aria-label="Toggle scanning all month folders"><i></i></button></div></div><div><div class="section-title"><h2>Folder</h2></div><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="folderPath">~/Pictures/VRChat</code><div class="folder-actions"><button class="btn" id="automationAutoLocate" type="button">Auto Locate</button><button class="btn" id="automationChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div><div class="setting"><span>Metadata source</span><code>VRCX</code></div></div></div></div></section>
-        <section class="view" id="settings"><div class="eyebrow">Settings</div><h1>Make it yours.</h1><p class="intro" style="margin-bottom:24px">Keep your folder, library behavior, and appearance easy to understand and change.</p><div class="settings-layout"><div><section class="settings-section"><h2>Library</h2><p>Choose where Organizer finds and organizes your screenshots.</p><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="settingsFolder">~/Pictures/VRChat</code><div class="folder-actions"><button class="btn" id="settingsAutoLocate" type="button">Auto Locate</button><button class="btn" id="settingsChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>World folder template</span><code>{world}</code></div><div class="setting"><span>Metadata provider</span><code>VRCX · Connected</code></div></div></section><section class="settings-section"><h2>Preferences</h2><p>Personalize the way the app greets you.</p><div class="setting-list"><div class="setting"><span>Welcome name</span><div class="name-setting"><code id="settingsName">Not set</code><button class="btn" id="editName">Edit</button></div></div></div></section><div class="settings-actions"><button class="btn" id="simulate">Preview organization</button><button class="btn" id="undo">Undo last organization</button></div><pre id="previewPanel" style="display:none;margin-top:18px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--muted);border:1px solid var(--line);padding:14px;border-radius:8px"></pre></div><aside class="settings-card"><div class="settings-section" style="margin:0;border-top:0;padding-top:0"><h2>About this app</h2><p>Current installation and organization details.</p><div class="setting-list"><div class="setting"><span>Application version</span><code>2.0.2</code></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div></div></div><div class="theme-setting"><h2>Appearance</h2><p>Choose an accent that feels right. Your choice is saved on this device.</p><div class="setting" style="padding-top:0"><span>Current theme</span><code id="appearanceSetting">Dark · Custom accent</code></div><div class="theme-options" role="group" aria-label="Accent color themes"><button class="theme-swatch" data-theme="violet" style="--swatch:#ab5fef" type="button"><i></i>Violet</button><button class="theme-swatch" data-theme="ocean" style="--swatch:#4bb8d8" type="button"><i></i>Ocean</button><button class="theme-swatch" data-theme="sunset" style="--swatch:#ed8b5b" type="button"><i></i>Sunset</button><button class="theme-swatch" data-theme="forest" style="--swatch:#6fcf97" type="button"><i></i>Forest</button><label class="custom-theme">Custom <input id="customTheme" type="color" value="#ab5fef" aria-label="Choose a custom accent color"></label></div><p class="settings-note">Your settings stay on this device. Folder changes apply to the next scan or watch session.</p></div></aside></div></section>
+        <section class="view" id="settings"><div class="eyebrow">Settings</div><h1>Make it yours.</h1><p class="intro" style="margin-bottom:24px">Keep your folder, library behavior, and appearance easy to understand and change.</p><div class="settings-layout"><div><section class="settings-section"><h2>Library</h2><p>Choose where Organizer finds and organizes your screenshots.</p><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="settingsFolder">~/Pictures/VRChat</code><div class="folder-actions"><button class="btn" id="settingsAutoLocate" type="button">Auto Locate</button><button class="btn" id="settingsChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>World folder template</span><code>{world}</code></div><div class="setting"><span>Metadata provider</span><code>VRCX · Connected</code></div></div></section><section class="settings-section"><h2>Preferences</h2><p>Personalize the way the app greets you.</p><div class="setting-list"><div class="setting"><span>Welcome name</span><div class="name-setting"><code id="settingsName">Not set</code><button class="btn" id="editName">Edit</button></div></div></div></section><div class="settings-actions"><button class="btn" id="simulate">Preview organization</button><button class="btn" id="undo">Undo last organization</button></div><pre id="previewPanel" style="display:none;margin-top:18px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--muted);border:1px solid var(--line);padding:14px;border-radius:8px"></pre></div><aside class="settings-card"><div class="settings-section" style="margin:0;border-top:0;padding-top:0"><h2>About this app</h2><p>Current installation and organization details.</p><div class="setting-list"><div class="setting"><span>Application version</span>        <code>2.1.0</code></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div></div></div><div class="theme-setting"><h2>Appearance</h2><p>Choose an accent that feels right. Your choice is saved on this device.</p><div class="setting" style="padding-top:0"><span>Current theme</span><code id="appearanceSetting">Dark · Custom accent</code></div><div class="theme-options" role="group" aria-label="Accent color themes"><button class="theme-swatch" data-theme="violet" style="--swatch:#ab5fef" type="button"><i></i>Violet</button><button class="theme-swatch" data-theme="ocean" style="--swatch:#4bb8d8" type="button"><i></i>Ocean</button><button class="theme-swatch" data-theme="sunset" style="--swatch:#ed8b5b" type="button"><i></i>Sunset</button><button class="theme-swatch" data-theme="forest" style="--swatch:#6fcf97" type="button"><i></i>Forest</button><label class="custom-theme">Custom <input id="customTheme" type="color" value="#ab5fef" aria-label="Choose a custom accent color"></label></div><p class="settings-note">Your settings stay on this device. Folder changes apply to the next scan or watch session.</p></div></aside></div></section>
       </div>
     </main>
   </div>
-  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media"><img id="lightboxImage" alt=""><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Players</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside></div>
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media"><img id="lightboxImage" alt=""><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Tagged people</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="photo-meta-row"><span>World metadata</span><strong id="lightboxWorldPlayerCount"></strong></div><div class="lightbox-players" id="lightboxWorldPlayers"></div><p class="lightbox-tag-hint">World metadata may list everyone present. Right-click the image to save only the people you can identify in this specific frame.</p><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside></div>
+  <div class="tag-menu" id="tagMenu" hidden role="dialog" aria-label="Tag a person"><strong>Tag a person in this image</strong><input id="tagPersonSearch" type="search" maxlength="80" autocomplete="off" placeholder="Search player name" aria-label="Search player name"><div class="tag-suggestions" id="tagSuggestions" role="listbox"></div><div class="tag-menu-actions"><button class="btn" id="cancelTag" type="button">Cancel</button><button class="btn primary" id="saveTag" type="button">Save tag</button></div></div>
   <div class="onboarding" id="onboarding" hidden>
     <div class="onboarding-panel" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
       <div class="onboarding-top"><div class="eyebrow">Getting started</div><span class="onboarding-step" id="onboardingStep">Step 1 of 3</span></div>
@@ -508,12 +521,13 @@
       if (cmd === 'validate_folder') return args?.folderPath || '~/Pictures/VRChat/VRChat';
       if (cmd === 'is_watching') return false;
       if (cmd === 'get_vrchat_status') return { vrcxRunning: false, vrchatRunning: false, vrchatStartedAt: null };
-      if (cmd === 'organize_folder' || cmd === 'cancel_scan' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'get_library' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run' || cmd === 'open_photo_location' || cmd === 'copy_photo_path' || cmd === 'add_photos_to_collection') return Promise.reject('This action requires the desktop app');
+      if (cmd === 'organize_folder' || cmd === 'cancel_scan' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'get_library' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run' || cmd === 'open_photo_location' || cmd === 'copy_photo_path' || cmd === 'add_photos_to_collection' || cmd === 'tag_photo_participant') return Promise.reject('This action requires the desktop app');
       return {};
     });
     const listen = window.__TAURI__?.event?.listen || (async () => () => {});
     let images = [];
     let peopleIndex = new Map();
+    let knownPeopleIndex = new Map();
     let peopleSearchTimer;
     let peopleResultState = null;
     let libraryRefreshInFlight = null;
@@ -521,6 +535,7 @@
     const photoImages = [];
     let viewerState = null;
     let watching = false, currentFilter = 'all', resolutionFilter = 'all', libraryTab = 'worlds';
+    let vrchatWatcherSyncInFlight = null;
     const $ = (s) => document.querySelector(s);
     const nameStorageKey = 'vrchat-organizer-name';
     const folderStorageKey = 'vrchat-organizer-folder';
@@ -737,7 +752,14 @@
         button.querySelector('strong').textContent = 'Scan my screenshots';
       }
     }
-    function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
+    let toastTimer;
+    function toast(message, duration = 2600) {
+      const el = $('#toast');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+    }
     let vrchatStartedAt = null;
     let vrchatWasRunning = null;
     function formatDuration(seconds) {
@@ -761,6 +783,36 @@
       if (sessionStarted && vrchatWasRunning !== true) setLibraryTab('session');
       vrchatWasRunning = vrchatRunning;
       if (statusChanged && libraryTab === 'session') renderWorlds();
+      syncWatcherToVrChat(vrchatRunning);
+    }
+    async function syncWatcherToVrChat(vrchatRunning) {
+      if (vrchatWatcherSyncInFlight) return vrchatWatcherSyncInFlight;
+      const shouldWatch = Boolean(vrchatRunning);
+      if (watching === shouldWatch) return;
+      vrchatWatcherSyncInFlight = (async () => {
+        try {
+          if (shouldWatch) {
+            await invoke('start_watching', {
+              folderPath: $('#folderPath').textContent,
+              dryRun: false,
+              scanAllMonths: scanAllMonthsEnabled(),
+              singleFolder: false,
+              template: '{world}'
+            });
+            setWatching(true);
+            toast('VRChat session detected — auto-watch started');
+          } else {
+            await invoke('stop_watching');
+            setWatching(false);
+            toast('VRChat closed — auto-watch stopped');
+          }
+        } catch (error) {
+          toast(`Auto-watch could not be changed: ${String(error)}`);
+        } finally {
+          vrchatWatcherSyncInFlight = null;
+        }
+      })();
+      return vrchatWatcherSyncInFlight;
     }
     async function refreshVrChatStatus() {
       try {
@@ -874,13 +926,24 @@
     }
     function rebuildPeopleIndex() {
       peopleIndex = new Map();
-      allLibraryPhotos().forEach(photo => (Array.isArray(photo.participants) ? photo.participants : []).forEach(person => {
-        const name = String(person).trim();
-        if (!name) return;
-        const key = name.toLowerCase();
-        if (!peopleIndex.has(key)) peopleIndex.set(key, { name, photos: [] });
-        peopleIndex.get(key).photos.push(photo);
-      }));
+      knownPeopleIndex = new Map();
+      allLibraryPhotos().forEach(photo => {
+        const tagged = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants : [];
+        const metadata = Array.isArray(photo.participants) ? photo.participants : [];
+        [...metadata, ...tagged].forEach(person => {
+          const name = String(person).trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (!knownPeopleIndex.has(key)) knownPeopleIndex.set(key, { name, photos: [] });
+        });
+        tagged.forEach(person => {
+          const name = String(person).trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (!peopleIndex.has(key)) peopleIndex.set(key, { name, photos: [] });
+          peopleIndex.get(key).photos.push(photo);
+        });
+      });
     }
     function setLibraryTab(tab) {
       libraryTab = tab;
@@ -897,7 +960,11 @@
       if (libraryRefreshInFlight) return libraryRefreshInFlight;
       const path = $('#folderPath').textContent;
       const scanAllMonths = scanAllMonthsOverride ?? scanAllMonthsEnabled();
-      $('#worldGrid').innerHTML = '<div class="library-state" aria-live="polite"><strong>Loading library…</strong><span>Reading your organized screenshots.</span></div>';
+      const hasLibraryContent = images.length || unorganizedPhotos.length || $('#worldGrid').children.length;
+      $('#worldGrid').classList.toggle('refreshing', Boolean(hasLibraryContent));
+      if (!hasLibraryContent) {
+        $('#worldGrid').innerHTML = '<div class="library-state" aria-live="polite"><strong>Loading library…</strong><span>Reading your organized screenshots.</span></div>';
+      }
       libraryRefreshInFlight = (async () => {
         try {
           applyLibrarySnapshot(await invoke('get_library', { folderPath: path, scanAllMonths }));
@@ -913,6 +980,7 @@
           $('#worldGrid').innerHTML = `<div class="library-state"><strong>Library unavailable</strong><span>${escapeHtml(String(error))}</span></div>`;
           toast(`Library refresh failed: ${String(error)}`);
         } finally {
+          $('#worldGrid').classList.remove('refreshing');
           libraryRefreshInFlight = null;
         }
       })();
@@ -1048,7 +1116,7 @@
       const dateText = date && !Number.isNaN(date.getTime())
         ? `${formatCaptureTime(capturedAt)} ${date.toISOString()}`
         : '';
-      const people = Array.isArray(photo?.participants) ? photo.participants.join(' ') : '';
+      const people = [...(Array.isArray(photo?.participants) ? photo.participants : []), ...(Array.isArray(photo?.taggedParticipants) ? photo.taggedParticipants : [])].join(' ');
       return `${photo?.worldName || fallbackWorld || ''} ${people} ${photo?.path || ''} ${dateText}`.toLowerCase();
     }
     function photoMatches(photo, query, fallbackWorld = '') {
@@ -1075,7 +1143,7 @@
       $('#storageTotalMeta').textContent = `Across ${photos.length} screenshot${photos.length === 1 ? '' : 's'}`;
       $('#storagePhotoCount').textContent = String(photos.length);
       $('#storageWorldCount').textContent = String(images.length);
-      $('#storagePeopleCount').textContent = String(new Set(photos.flatMap(photo => Array.isArray(photo.participants) ? photo.participants : [])).size);
+      $('#storagePeopleCount').textContent = String(new Set(photos.flatMap(photo => Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants : [])).size);
       const ordered = Object.entries(groups).sort(([, a], [, b]) => b.bytes - a.bytes);
       $('#storageBars').innerHTML = ordered.length ? ordered.map(([label, group]) => `<div class="storage-row"><strong>${escapeHtml(label)}</strong><div class="storage-track"><i style="width:${total ? Math.max(2, group.bytes / total * 100) : 0}%"></i></div><span>${escapeHtml(formatBytes(group.bytes))} · ${group.count}</span></div>`).join('') : '<div class="empty">Scan your screenshot folder to see storage usage.</div>';
     }
@@ -1091,7 +1159,7 @@
         $('#peopleSuggestions').innerHTML = '';
         return;
       }
-      const names = [...peopleIndex.values()].sort((a, b) => a.name.localeCompare(b.name));
+      const names = [...knownPeopleIndex.values()].sort((a, b) => a.name.localeCompare(b.name));
       const matches = names.filter(person => person.name.toLowerCase().startsWith(query));
       const suggestions = (matches.length ? matches : names.filter(person => person.name.toLowerCase().includes(query))).slice(0, 10);
       $('#peopleSuggestions').innerHTML = suggestions.map(person => `<button class="people-suggestion" type="button" data-person-suggestion="${escapeHtml(person.name)}">${escapeHtml(person.name)}</button>`).join('');
@@ -1300,9 +1368,12 @@
       $('#lightboxWorld').textContent = worldName;
       $('#lightboxWorldInfo').textContent = photo.worldName ? 'World metadata available' : 'No world info';
       $('#lightboxTime').textContent = formatCaptureTime(photo.capturedAt);
-      const players = Array.isArray(photo.participants) ? photo.participants : [];
+      const players = Array.isArray(photo.taggedParticipants) ? photo.taggedParticipants : [];
+      const worldPlayers = Array.isArray(photo.participants) ? photo.participants : [];
       $('#lightboxPlayerCount').textContent = players.length ? String(players.length) : 'No player data';
       $('#lightboxPlayers').innerHTML = players.length ? players.map(player => `<span class="photo-person">${escapeHtml(player)}</span>`).join('') : '<span class="photo-meta-empty">No player data</span>';
+      $('#lightboxWorldPlayerCount').textContent = worldPlayers.length ? String(worldPlayers.length) : 'No metadata';
+      $('#lightboxWorldPlayers').innerHTML = worldPlayers.length ? worldPlayers.map(player => `<span class="photo-person">${escapeHtml(player)}</span>`).join('') : '<span class="photo-meta-empty">No world participant metadata</span>';
       $('#lightboxError').hidden = true;
       $('#lightboxImage').hidden = false;
       $('#lightboxImage').alt = `${worldName} screenshot`;
@@ -1313,9 +1384,62 @@
       if (viewerState.photos[viewerState.index - 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index - 1].path);
       if (viewerState.photos[viewerState.index + 1]) new Image().src = assetUrl(viewerState.photos[viewerState.index + 1].path);
     }
-    function openViewer(world, index) { viewerState = { world, photos: world.photos, index }; $('#lightbox').hidden = false; renderViewerPhoto(); }
-    function closeViewer() { $('#lightbox').hidden = true; viewerState = null; }
-    function moveViewer(step) { if (!viewerState) return; viewerState.index = (viewerState.index + step + viewerState.photos.length) % viewerState.photos.length; renderViewerPhoto(); }
+    function renderTagSuggestions() {
+      const query = ($('#tagPersonSearch').value || '').trim().toLowerCase();
+      const names = [...knownPeopleIndex.values()].map(person => person.name).sort((a, b) => a.localeCompare(b));
+      const matches = (query ? names.filter(name => name.toLowerCase().includes(query)) : names).slice(0, 8);
+      $('#tagSuggestions').innerHTML = matches.map(name => `<button class="tag-suggestion" type="button" role="option" data-tag-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('');
+    }
+    function closeTagMenu() {
+      $('#tagMenu').hidden = true;
+    }
+    function openTagMenu(event) {
+      if (!viewerState) return;
+      event.preventDefault();
+      const menu = $('#tagMenu');
+      menu.hidden = false;
+      const left = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 12);
+      const top = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 12);
+      menu.style.left = `${Math.max(12, left)}px`;
+      menu.style.top = `${Math.max(12, top)}px`;
+      $('#tagPersonSearch').value = '';
+      renderTagSuggestions();
+      $('#tagPersonSearch').focus();
+    }
+    async function savePhotoTag() {
+      if (!viewerState) return;
+      const participant = ($('#tagPersonSearch').value || '').trim();
+      if (!participant) {
+        $('#tagPersonSearch').focus();
+        return;
+      }
+      const photo = viewerState.photos[viewerState.index];
+      $('#saveTag').disabled = true;
+      try {
+        const taggedParticipants = await invoke('tag_photo_participant', {
+          folderPath: $('#folderPath').textContent,
+          photoPath: photo.path,
+          participant
+        });
+        photo.taggedParticipants = taggedParticipants;
+        closeTagMenu();
+        renderViewerPhoto();
+        toast(`Tagged ${participant}`);
+        await refreshLibrary();
+        const refreshedPhoto = allLibraryPhotos().find(item => item.path === photo.path);
+        if (refreshedPhoto && viewerState) {
+          viewerState.photos[viewerState.index] = refreshedPhoto;
+          renderViewerPhoto();
+        }
+      } catch (error) {
+        toast(`Could not save tag: ${String(error)}`);
+      } finally {
+        $('#saveTag').disabled = false;
+      }
+    }
+    function openViewer(world, index) { closeTagMenu(); viewerState = { world, photos: world.photos, index }; $('#lightbox').hidden = false; renderViewerPhoto(); }
+    function closeViewer() { closeTagMenu(); $('#lightbox').hidden = true; viewerState = null; }
+    function moveViewer(step) { if (!viewerState) return; closeTagMenu(); viewerState.index = (viewerState.index + step + viewerState.photos.length) % viewerState.photos.length; renderViewerPhoto(); }
     function updateNavigationCounts() {
       $('#libraryNavCount').textContent = String(images.length);
       $('#collectionsNavCount').textContent = String(images.filter(image => image.favorite).length);
@@ -1333,8 +1457,23 @@
     $('#nextPhoto').addEventListener('click', () => moveViewer(1));
     $('#openPhotoLocation').addEventListener('click', async () => { if (!viewerState) return; try { await invoke('open_photo_location', { path: viewerState.photos[viewerState.index].path }); toast('Location opened'); } catch (error) { toast(`Could not open location: ${String(error)}`); } });
     $('#copyPhotoPath').addEventListener('click', async () => { if (!viewerState) return; try { await invoke('copy_photo_path', { path: viewerState.photos[viewerState.index].path }); toast('Copied'); } catch (error) { toast(`Could not copy path: ${String(error)}`); } });
+    $('#lightboxImage').addEventListener('contextmenu', openTagMenu);
+    $('#tagPersonSearch').addEventListener('input', renderTagSuggestions);
+    $('#tagSuggestions').addEventListener('click', event => {
+      const suggestion = event.target.closest('[data-tag-name]');
+      if (!suggestion) return;
+      $('#tagPersonSearch').value = suggestion.dataset.tagName;
+      $('#tagSuggestions').innerHTML = '';
+      $('#tagPersonSearch').focus();
+    });
+    $('#saveTag').addEventListener('click', savePhotoTag);
+    $('#cancelTag').addEventListener('click', closeTagMenu);
+    document.addEventListener('click', event => {
+      if (!$('#tagMenu').hidden && !event.target.closest('#tagMenu') && event.target !== $('#lightboxImage')) closeTagMenu();
+    });
+    $('#tagPersonSearch').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); savePhotoTag(); } });
     $('#lightbox').addEventListener('click', event => { if (event.target.id === 'lightbox') closeViewer(); });
-    document.addEventListener('keydown', event => { if (!viewerState) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
+    document.addEventListener('keydown', event => { if (!viewerState) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape' && !$('#tagMenu').hidden) { closeTagMenu(); return; } if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
     function setWatching(next) { watching = next; $('#watchPulse').classList.toggle('live', watching); $('#watchLabel').textContent = watching ? 'Watcher is live' : 'Watcher paused'; $('#watchCopy').textContent = watching ? 'New captures will be organized automatically.' : 'New screenshots are waiting for you.'; $('#watchToggle').textContent = watching ? 'Pause watching →' : 'Start watching →'; $('#watchMain').textContent = watching ? 'Watching now' : 'Start watching'; $('#automationToggle').textContent = watching ? 'Pause watching' : 'Start watching'; $('#automationStatus').textContent = watching ? 'Watcher is active.' : 'Watcher is paused.'; $('#watchSwitch').classList.toggle('on', watching); }
     document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { selectNavigation(btn.dataset.view); const view = btn.dataset.view; if (view !== 'people') resetPeopleSearch(); document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; if (view === 'timeline') renderTimeline(); if (view === 'collections') renderCollections(); if (view === 'storage') renderStorage(); if (view === 'activity') refreshActivity(); }));
     let searchRenderTimer;
@@ -1495,14 +1634,14 @@
       $('#activityTerminalOutput').innerHTML = '<span class="activity-terminal-line"><span class="terminal-time">--:--:--</span> <span class="terminal-level">INFO</span> Terminal cleared.</span>';
     });
     document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); $('#undo').click(); } if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); $('#search').focus(); } });
-    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); setScanAllMonths(scanAllMonthsEnabled()); const state = await invoke('is_watching'); setWatching(Boolean(state)); await listen('library-updated', event => { applyLibrarySnapshot(event.payload); renderWorlds(); renderTimeline(); renderStorage(); refreshPeopleIndex(); }); await listen('library-error', event => toast(`Background library scan failed: ${String(event.payload?.error || event.payload)}`)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); await refreshLibrary(); }
+    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); setScanAllMonths(scanAllMonthsEnabled()); const state = await invoke('is_watching'); setWatching(Boolean(state)); await listen('library-updated', event => { $('#worldGrid').classList.add('refreshing'); applyLibrarySnapshot(event.payload); renderWorlds(); renderTimeline(); renderStorage(); refreshPeopleIndex(); requestAnimationFrame(() => $('#worldGrid').classList.remove('refreshing')); }); await listen('library-error', event => toast(`Background library scan failed: ${String(event.payload?.error || event.payload)}`)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); await refreshLibrary(); }
     loadTheme();
     updateWelcome();
     setInterval(updateWelcome, 60000);
     setInterval(() => { refreshVrChatStatus(); if (vrchatStartedAt) $('#vrchatDuration').textContent = `Open for ${formatDuration(Date.now() / 1000 - vrchatStartedAt)}`; }, 5000);
-    listen('watch-organized', event => { const stats = event?.payload?.stats || {}; if (stats.noMetadata) { appendTerminalLine('info', `Watcher skipped ${stats.noMetadata} file(s): no world metadata`); toast('New screenshot needs world metadata'); } else { appendTerminalLine('success', `Watcher organized ${stats.organized || 1} file(s)`); toast('New screenshot organized'); } refreshLibrary(); });
+    listen('watch-organized', event => { const stats = event?.payload?.stats || {}; if (stats.noMetadata) { appendTerminalLine('info', `Watcher skipped ${stats.noMetadata} file(s): no world metadata`); toast('New screenshot needs world metadata', 10000); } else { const organized = Array.isArray(stats.organizedPhotos) ? stats.organizedPhotos : []; const message = organized.length ? organized.map(item => `Organised ${item.photoName} into folder ${item.folderName}`).join('\\n') : 'Screenshot organised'; appendTerminalLine('success', message); toast(message, 10000); } refreshLibrary(); });
     listen('watch-initial-scan', event => { if (event?.payload?.error) { appendTerminalLine('error', `Initial scan failed: ${event.payload.error}`); toast(`Initial scan failed: ${event.payload.error}`); } else { appendTerminalLine('success', 'Watcher initial scan completed'); refreshLibrary(); } });
-    listen('watch-status', event => { const status = event?.payload?.status; if (status === 'started') appendTerminalLine('info', 'Watcher started'); if (status === 'stopped') appendTerminalLine('info', 'Watcher stopped'); });
+    listen('watch-status', event => { const status = event?.payload?.status; if (status === 'started') { setWatching(true); appendTerminalLine('info', 'Watcher started'); } if (status === 'stopped') { setWatching(false); appendTerminalLine('info', 'Watcher stopped'); } });
     listen('watch-error', e => { appendTerminalLine('error', e?.payload?.error || 'Watcher error'); toast(e?.payload?.error || 'Watcher error'); }); boot();
   </script>
 </body>

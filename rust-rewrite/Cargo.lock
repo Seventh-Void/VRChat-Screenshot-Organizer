@@ -61,7 +61,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "2.0.2"
+version = "2.1.0"
 dependencies = [
  "arboard",
  "notify",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "2.0.2"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "organizer-core",
@@ -2407,10 +2407,11 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "organizer-core"
-version = "2.0.2"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "crc32fast",
  "fast_image_resize",
  "flate2",
  "image",

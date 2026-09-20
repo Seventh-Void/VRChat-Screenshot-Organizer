@@ -11,7 +11,7 @@ watch mode, undo support and AppImage packaging documented there.
 [![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?logo=tauri)](https://v2.tauri.app/)
 [![Release](https://img.shields.io/github/v/release/Seventh-Void/VRChat-Screenshot-Organizer)](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases)
 
-> **Version 2.0.2** — the current Rust/Tauri desktop release.
+> **Version 2.1.0** — the current Rust/Tauri desktop release.
 
 ![VRChat Organizer library](./docs/screenshots/library.png)
 
@@ -72,10 +72,10 @@ This project has been developed with assistance from an AI coding tool. While th
 ### Download
 
 Download the latest version from the [releases page](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases).
-The v2.0.2 release includes:
+The v2.1.0 release includes:
 
-- `VRChatOrganizer-2.0.2-x86_64.AppImage` — Linux x86_64 Tauri GUI bundle
-- `VRChatOrganizer-2.0.2-windows-x86_64.exe` — Windows x86_64 CLI build
+- `VRChatOrganizer-2.1.0-x86_64.AppImage` — Linux x86_64 Tauri GUI bundle
+- `VRChatOrganizer-2.1.0-windows-x86_64.exe` — Windows x86_64 CLI build
 - Native Windows Tauri portable and installer builds produced by GitHub Actions
 - `SHA256SUMS` and the release README
 
@@ -85,8 +85,8 @@ The AppImage contains the application and release assets. Install the Tauri
 Linux runtime libraries listed in the build requirements before launching it:
 
 ```bash
-chmod +x VRChatOrganizer-2.0.2-x86_64.AppImage
-./VRChatOrganizer-2.0.2-x86_64.AppImage
+chmod +x VRChatOrganizer-2.1.0-x86_64.AppImage
+./VRChatOrganizer-2.1.0-x86_64.AppImage
 ```
 
 On Debian/Ubuntu, the required WebKitGTK/GTK packages are the same packages
@@ -102,7 +102,7 @@ contains the application icon, desktop entry, and AppStream metadata.
 
 Use the native Windows Tauri NSIS installer for a normal Start Menu installation,
 or use the portable Tauri executable when you do not want to install anything.
-The separately provided `VRChatOrganizer-2.0.2-windows-x86_64.exe` is the
+The separately provided `VRChatOrganizer-2.1.0-windows-x86_64.exe` is the
 headless CLI build and does not provide the GUI. Windows 10/11 includes WebView2
 on supported systems; if a GUI build reports a missing WebView2 runtime, install it from Microsoft's
 [WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
@@ -117,10 +117,10 @@ on supported systems; if a GUI build reports a missing WebView2 runtime, install
 
 ```bash
 # Make the AppImage executable
-chmod +x VRChatOrganizer-2.0.2-x86_64.AppImage
+chmod +x VRChatOrganizer-2.1.0-x86_64.AppImage
 
 # Launch the desktop app
-./VRChatOrganizer-2.0.2-x86_64.AppImage
+./VRChatOrganizer-2.1.0-x86_64.AppImage
 ```
 
 The GUI provides:
@@ -184,8 +184,8 @@ cargo build --release
 ./build-windows.sh
 ```
 
-The scripts write release assets to `../release/v2.0.2/`:
-`VRChatOrganizer-2.0.2-x86_64.AppImage`, the Windows CLI executable, and
+The scripts write release assets to `../release/v2.1.0/`:
+`VRChatOrganizer-2.1.0-x86_64.AppImage`, the Windows CLI executable, and
 `SHA256SUMS`. The native Windows GUI, portable executable, NSIS installer, and
 MSI are built on the Windows GitHub Actions runner because Tauri uses the native
 Windows WebView2 toolchain.
@@ -312,7 +312,7 @@ The **Watch** feature uses a combination of OS filesystem events (`inotify` on L
 
 ### Permission denied errors
 - Ensure you have read/write permissions on the VRChat pictures directory
-- Make the AppImage executable: `chmod +x VRChatOrganizer-2.0.2-x86_64.AppImage`
+- Make the AppImage executable: `chmod +x VRChatOrganizer-2.1.0-x86_64.AppImage`
 
 ### Tauri GUI shows a blank/black window
 - Ensure WebKit2GTK is installed on your system (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
@@ -348,7 +348,7 @@ VRChat-Screenshot-Organizer/
 │   │   └── capabilities/
 │   │       └── default.json
 │   └── README.md                    # Rust-specific details
-├── release/v2.0.2/                  # Local release staging area (ignored binaries)
+├── release/v2.1.0/                  # Local release staging area (ignored binaries)
 ├── docs/screenshots/                # Documentation screenshots
 ├── README.md                        # This file
 ├── CONTRIBUTING.md

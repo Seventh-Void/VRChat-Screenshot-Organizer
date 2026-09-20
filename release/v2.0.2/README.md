@@ -19,6 +19,9 @@ session.
 - **Faster People search** — Suggestions use cached player metadata, and
   confirmed results render in small batches instead of creating every card at
   once.
+- **Image participant tags** — Right-click an open PNG screenshot, search or
+  select a player name, and save an explicit in-frame tag directly into the
+  image metadata. World participant metadata remains separate.
 - **PNG metadata efficiency** — PNG metadata reads chunk headers and text
   chunks without decoding pixel data during library scanning.
 - **Release cleanup** — Removed generated build directories and development

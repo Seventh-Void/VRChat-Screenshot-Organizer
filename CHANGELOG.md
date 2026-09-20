@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0 - 2026-09-20
+
+- Added explicit image person tags separate from world participant metadata.
+- Added subtle background library refreshes and detailed organization toasts.
+- Started and stopped auto-watch with the VRChat process session.
+
 ## 2.0.2 - 2026-09-20
 
 - Added a Current session Library tab showing screenshots captured since VRChat

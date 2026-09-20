@@ -1,7 +1,8 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use organizer_core::{
     cached_library, clear_cancel_request, generate_thumbnail, organize_path, organize_single_file,
-    read_activity_log, request_cancel, scan_library_with_cache, undo_organization,
+    read_activity_log, request_cancel, scan_library_with_cache, tag_png_participant,
+    undo_organization,
     validate_template, ActivityEntry, OrganizerConfig, OrganizerStats,
 };
 use std::path::{Path, PathBuf};
@@ -157,12 +158,33 @@ async fn get_thumbnail(folder_path: String, photo_path: String) -> Result<String
                 photo_path.display()
             ));
         }
+
         generate_thumbnail(&photo_path, &base_path)
             .map(|path| path.to_string_lossy().into_owned())
             .map_err(|error| format!("thumbnail generation failed: {error}"))
     })
     .await
     .map_err(|error| format!("thumbnail task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn tag_photo_participant(
+    folder_path: String,
+    photo_path: String,
+    participant: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base_path = std::fs::canonicalize(shellexpand::tilde(&folder_path).to_string())
+            .map_err(|error| format!("screenshot folder is not accessible: {error}"))?;
+        let photo_path = std::fs::canonicalize(shellexpand::tilde(&photo_path).to_string())
+            .map_err(|error| format!("photo is not accessible: {error}"))?;
+        if !photo_path.starts_with(&base_path) || !photo_path.is_file() {
+            return Err("photo is outside the selected screenshot folder".to_string());
+        }
+        tag_png_participant(&photo_path, &participant).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("tagging task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -627,6 +649,7 @@ pub fn run() {
             get_activity,
             get_library,
             get_thumbnail,
+            tag_photo_participant,
             get_default_path,
             open_photo_location,
             copy_photo_path,

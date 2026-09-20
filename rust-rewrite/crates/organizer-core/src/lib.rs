@@ -128,6 +128,7 @@ pub fn classify_world(
 pub struct ImageMeta {
     pub world_name: Option<String>,
     pub participants: Vec<String>,
+    pub tagged_participants: Vec<String>,
     pub captured_at: Option<u64>,
     pub width: u32,
     pub height: u32,
@@ -172,6 +173,8 @@ pub struct LibraryPhoto {
     pub captured_at: Option<u64>,
     pub world_name: Option<String>,
     pub participants: Vec<String>,
+    #[serde(default)]
+    pub tagged_participants: Vec<String>,
     pub width: u32,
     pub height: u32,
     pub size_bytes: u64,
@@ -199,20 +202,29 @@ fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
             world_name TEXT,
             captured_at INTEGER,
             participants TEXT NOT NULL,
+            tagged_participants TEXT NOT NULL DEFAULT '[]',
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
             thumbnail_path TEXT NOT NULL
-        );",
-    )?;
+        );
+        ALTER TABLE photos ADD COLUMN tagged_participants TEXT NOT NULL DEFAULT '[]';",
+    ).or_else(|error| {
+        if error.to_string().contains("duplicate column name") {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })?;
     let mut statement = connection.prepare(
-        "SELECT path,size_bytes,modified_secs,world_name,captured_at,participants,width,height,thumbnail_path FROM photos",
+        "SELECT path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,width,height,thumbnail_path FROM photos",
     )?;
     let mut rows = statement.query([])?;
     let mut result = HashMap::new();
     while let Some(row) = rows.next()? {
         let path: String = row.get(0)?;
-        let participants =
-            serde_json::from_str(row.get::<_, String>(5)?.as_str()).unwrap_or_default();
+        let participants = serde_json::from_str(row.get::<_, String>(5)?.as_str()).unwrap_or_default();
+        let tagged_participants =
+            serde_json::from_str(row.get::<_, String>(6)?.as_str()).unwrap_or_default();
         result.insert(
             path.clone(),
             CachedPhoto {
@@ -220,12 +232,13 @@ fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
                 modified_secs: row.get::<_, i64>(2)?.max(0) as u64,
                 photo: LibraryPhoto {
                     path,
-                    thumbnail_path: row.get(8)?,
+                    thumbnail_path: row.get(9)?,
                     captured_at: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
                     world_name: row.get(3)?,
                     participants,
-                    width: row.get::<_, i64>(6)?.max(0) as u32,
-                    height: row.get::<_, i64>(7)?.max(0) as u32,
+                    tagged_participants,
+                    width: row.get::<_, i64>(7)?.max(0) as u32,
+                    height: row.get::<_, i64>(8)?.max(0) as u32,
                     size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
                 },
             },
@@ -322,11 +335,19 @@ fn save_cache(
             world_name TEXT,
             captured_at INTEGER,
             participants TEXT NOT NULL,
+            tagged_participants TEXT NOT NULL DEFAULT '[]',
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
             thumbnail_path TEXT NOT NULL
-        );",
-    )?;
+        );
+        ALTER TABLE photos ADD COLUMN tagged_participants TEXT NOT NULL DEFAULT '[]';",
+    ).or_else(|error| {
+        if error.to_string().contains("duplicate column name") {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })?;
     let transaction = connection.transaction()?;
     for (_, photo) in candidates {
         let modified_secs = files
@@ -336,8 +357,8 @@ fn save_cache(
             .unwrap_or_default();
         transaction.execute(
             "INSERT OR REPLACE INTO photos
-             (path,size_bytes,modified_secs,world_name,captured_at,participants,width,height,thumbnail_path)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+             (path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,width,height,thumbnail_path)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 photo.path,
                 photo.size_bytes as i64,
@@ -345,6 +366,7 @@ fn save_cache(
                 photo.world_name,
                 photo.captured_at.map(|value| value as i64),
                 serde_json::to_string(&photo.participants)?,
+                serde_json::to_string(&photo.tagged_participants)?,
                 photo.width as i64,
                 photo.height as i64,
                 photo.thumbnail_path,
@@ -450,6 +472,10 @@ fn scan_library_partition_with_options(
                 participants: metadata
                     .as_ref()
                     .map(|meta| meta.participants.clone())
+                    .unwrap_or_default(),
+                tagged_participants: metadata
+                    .as_ref()
+                    .map(|meta| meta.tagged_participants.clone())
                     .unwrap_or_default(),
                 width: metadata.as_ref().map(|meta| meta.width).unwrap_or_default(),
                 height: metadata
@@ -658,6 +684,15 @@ pub struct OrganizerStats {
     #[serde(default)]
     pub unorganized_photos: Vec<LibraryPhoto>,
     pub preview: Vec<String>,
+    #[serde(default)]
+    pub organized_photos: Vec<OrganizedPhoto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizedPhoto {
+    pub photo_name: String,
+    pub folder_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1174,10 +1209,13 @@ fn extract_png_text_chunks_full(path: &Path) -> Result<Vec<PngTextEntry>> {
 }
 
 /// Parse world name and software from a list of PNG text entries.
-fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String>, Vec<String>) {
+fn parse_png_entries(
+    entries: &[PngTextEntry],
+) -> (Option<String>, Option<String>, Vec<String>, Vec<String>) {
     let mut world_name: Option<String> = None;
     let mut software: Option<String> = None;
     let mut participants = Vec::new();
+    let mut tagged_participants: Vec<String> = Vec::new();
 
     for entry in entries {
         match entry.keyword.to_lowercase().as_str() {
@@ -1210,16 +1248,108 @@ fn parse_png_entries(entries: &[PngTextEntry]) -> (Option<String>, Option<String
                     }
                 }
             }
+            "vrchat organizer participants" => {
+                if let Ok(names) = serde_json::from_str::<Vec<String>>(&entry.value) {
+                    for name in names {
+                        let name = name.trim();
+                        if !name.is_empty()
+                            && !tagged_participants
+                                .iter()
+                                .any(|existing| existing.eq_ignore_ascii_case(name))
+                        {
+                            tagged_participants.push(name.to_owned());
+                        }
+                    }
+                }
+            }
             "software" | "creator tool" | "creator_tool"
                 if software.is_none() && !entry.value.is_empty() =>
             {
                 software = Some(entry.value.clone());
             }
+
             _ => {}
         }
     }
 
-    (world_name, software, participants)
+    (world_name, software, participants, tagged_participants)
+}
+
+fn png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
+    let length = u32::try_from(data.len()).context("PNG metadata is too large")?;
+    let mut chunk = Vec::with_capacity(data.len() + 12);
+    chunk.extend_from_slice(&length.to_be_bytes());
+    chunk.extend_from_slice(chunk_type);
+    chunk.extend_from_slice(data);
+    let mut checksum = crc32fast::Hasher::new();
+    checksum.update(chunk_type);
+    checksum.update(data);
+    chunk.extend_from_slice(&checksum.finalize().to_be_bytes());
+    Ok(chunk)
+}
+
+/// Add a person to the Organizer-owned PNG metadata without re-encoding pixels.
+pub fn tag_png_participant(path: &Path, participant: &str) -> Result<Vec<String>> {
+    let participant = participant.trim();
+    if participant.is_empty() {
+        anyhow::bail!("participant name must not be empty");
+    }
+    if participant.chars().count() > 80 {
+        anyhow::bail!("participant name is too long");
+    }
+
+    let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if data.len() < 8 || data[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
+        anyhow::bail!("person tagging currently supports PNG screenshots only");
+    }
+
+    let entries = extract_png_text_chunks(path)?;
+    let (_, _, _, mut participants) = parse_png_entries(&entries);
+    if !participants
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(participant))
+    {
+        participants.push(participant.to_owned());
+    }
+
+    let metadata = serde_json::to_string(&participants)?;
+    let mut text = b"VRChat Organizer Participants".to_vec();
+    text.push(0);
+    text.extend_from_slice(metadata.as_bytes());
+    let metadata_chunk = png_chunk(b"tEXt", &text)?;
+
+    let mut output = Vec::with_capacity(data.len() + metadata_chunk.len());
+    output.extend_from_slice(&data[..8]);
+    let mut offset = 8;
+    let mut inserted = false;
+    while offset + 12 <= data.len() {
+        let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let end = offset
+            .checked_add(12)
+            .and_then(|value| value.checked_add(length))
+            .ok_or_else(|| anyhow::anyhow!("malformed PNG chunk length"))?;
+        if end > data.len() {
+            anyhow::bail!("malformed PNG: chunk exceeds file size");
+        }
+        if !inserted && &data[offset + 4..offset + 8] == b"IDAT" {
+            output.extend_from_slice(&metadata_chunk);
+            inserted = true;
+        }
+        output.extend_from_slice(&data[offset..end]);
+        let is_iend = &data[offset + 4..offset + 8] == b"IEND";
+        offset = end;
+        if is_iend {
+            break;
+        }
+    }
+    if !inserted {
+        anyhow::bail!("PNG is missing IDAT");
+    }
+
+    let temporary = path.with_extension("png.organizer.tmp");
+    fs::write(&temporary, output)?;
+    fs::rename(&temporary, path)?;
+    Ok(participants)
 }
 
 // ── JPEG EXIF extraction ──────────────────────────────────────────────────
@@ -1322,10 +1452,13 @@ pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
             .with_context(|| format!("failed to read image dimensions for {}", path.display()))?
     };
 
-    let (world_name, software, participants) = match ext.as_deref() {
+    let (world_name, software, participants, tagged_participants) = match ext.as_deref() {
         Some("jpg") | Some("jpeg") => {
             // Try EXIF for JPEG files
-            extract_exif_meta(path)
+            {
+                let (world, software, participants) = extract_exif_meta(path);
+                (world, software, participants, Vec::new())
+            }
         }
         Some("png") => {
             // Try PNG text chunks
@@ -1333,12 +1466,13 @@ pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
             parse_png_entries(&entries)
         }
         // For WebP and other formats, we can only get dimensions
-        _ => (None, None, Vec::new()),
+        _ => (None, None, Vec::new(), Vec::new()),
     };
 
     Ok(ImageMeta {
         world_name,
         participants,
+        tagged_participants,
         captured_at: path
             .file_name()
             .and_then(|name| name.to_str())
@@ -1671,6 +1805,10 @@ fn organize_single_file_unlocked(
             println!("moved {} -> {}", file_path.display(), destination.display());
         }
         stats.organized += 1;
+        stats.organized_photos.push(OrganizedPhoto {
+            photo_name: filename.to_string(),
+            folder_name: target_sub.clone(),
+        });
         // Track per-world photo count (skip "Prints" folder)
         if target_sub != "Prints" {
             let world_name = target_sub.clone();
@@ -1817,7 +1955,7 @@ mod tests {
             keyword: "Description".to_string(),
             value: r#"{"world":{"name":"真实世界 🌏"}}"#.to_string(),
         }];
-        let (world, _, _) = parse_png_entries(&entries);
+        let (world, _, _, _) = parse_png_entries(&entries);
         let path = Path::new("2026-09/Folder/capture.png");
         assert_eq!(classify_world(path, world.as_deref(), true, 1), None);
         assert_eq!(
@@ -1891,6 +2029,7 @@ mod tests {
         let meta = ImageMeta {
             world_name: Some("Black Cat".to_string()),
             participants: Vec::new(),
+            tagged_participants: Vec::new(),
             captured_at: None,
             width: 1920,
             height: 1080,
@@ -1909,6 +2048,7 @@ mod tests {
         let meta = ImageMeta {
             world_name: None,
             participants: Vec::new(),
+            tagged_participants: Vec::new(),
             captured_at: None,
             width: 2048,
             height: 1440,
@@ -1935,6 +2075,7 @@ mod tests {
         let meta = ImageMeta {
             world_name: Some("World".to_string()),
             participants: Vec::new(),
+            tagged_participants: Vec::new(),
             captured_at: None,
             width: 1920,
             height: 1080,
@@ -2098,9 +2239,33 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].keyword, "Description");
 
-        let (world, _software, participants) = parse_png_entries(&entries);
+        let (world, _software, participants, tagged_participants) = parse_png_entries(&entries);
         assert_eq!(world.as_deref(), Some("Black Cat"));
         assert_eq!(participants, vec!["Alice".to_string(), "Bob".to_string()]);
+        assert!(tagged_participants.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tags_png_participant_without_reencoding_pixels() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-tag-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("capture.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+
+        let first = tag_png_participant(&path, "Alice").unwrap();
+        assert_eq!(first, vec!["Alice".to_string()]);
+        let second = tag_png_participant(&path, "alice").unwrap();
+        assert_eq!(second, vec!["Alice".to_string()]);
+        let meta = extract_image_meta(&path).unwrap();
+        assert!(meta.participants.is_empty());
+        assert_eq!(meta.tagged_participants, vec!["Alice".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
