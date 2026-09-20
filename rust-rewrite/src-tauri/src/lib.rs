@@ -1,19 +1,17 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use organizer_core::{
-    organize_path, organize_single_file, read_activity_log, scan_library_with_options,
-    undo_organization, validate_template, ActivityEntry, OrganizerConfig, OrganizerStats,
+    cached_library, clear_cancel_request, generate_thumbnail, organize_path, organize_single_file,
+    read_activity_log, request_cancel, scan_library_with_cache, undo_organization,
+    validate_template, ActivityEntry, OrganizerConfig, OrganizerStats,
 };
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Managed state holding the optional file watcher and a running flag.
 pub struct WatcherState {
-    pub watcher: Mutex<Option<RecommendedWatcher>>,
     pub running: AtomicBool,
 }
 
@@ -52,6 +50,7 @@ async fn organize_folder(
     single_folder: bool,
     template: String,
 ) -> Result<OrganizerStats, String> {
+    clear_cancel_request();
     tauri::async_runtime::spawn_blocking(move || {
         organize_folder_blocking(
             folder_path,
@@ -63,6 +62,12 @@ async fn organize_folder(
     })
     .await
     .map_err(|err| format!("scan task failed: {err}"))?
+}
+
+#[tauri::command]
+fn cancel_scan() -> Result<String, String> {
+    request_cancel();
+    Ok("cancelling".to_string())
 }
 
 #[tauri::command]
@@ -82,16 +87,82 @@ fn get_activity(folder_path: String) -> Result<Vec<ActivityEntry>, String> {
 }
 
 #[tauri::command]
-async fn get_library(folder_path: String, scan_all_months: bool) -> Result<OrganizerStats, String> {
+async fn get_library(
+    app: AppHandle,
+    folder_path: String,
+    scan_all_months: bool,
+) -> Result<OrganizerStats, String> {
+    let expanded = shellexpand::tilde(&folder_path)
+        .to_string()
+        .replace('\\', "/");
+    let cache_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("could not locate app data directory: {error}"))?
+        .join("library.sqlite");
+    let base_path = PathBuf::from(&expanded);
+    if let Some(snapshot) =
+        cached_library(&cache_path, &base_path, scan_all_months).map_err(|err| err.to_string())?
+    {
+        let background_app = app.clone();
+        let background_path = base_path;
+        let background_cache = cache_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            match scan_library_with_cache(
+                &background_path,
+                scan_all_months,
+                Some(&background_cache),
+            ) {
+                Ok(stats) => {
+                    let _ = background_app.emit("library-updated", stats);
+                }
+
+                Err(error) => {
+                    let _ = background_app.emit(
+                        "library-error",
+                        serde_json::json!({ "error": error.to_string() }),
+                    );
+                }
+            }
+        });
+        return Ok(snapshot);
+    }
+    let background_app = app.clone();
+    let background_path = base_path;
+    let background_cache = cache_path;
     tauri::async_runtime::spawn_blocking(move || {
-        let expanded = shellexpand::tilde(&folder_path)
-            .to_string()
-            .replace('\\', "/");
-        scan_library_with_options(&PathBuf::from(expanded), scan_all_months)
-            .map_err(|err| err.to_string())
+        match scan_library_with_cache(&background_path, scan_all_months, Some(&background_cache)) {
+            Ok(stats) => {
+                let _ = background_app.emit("library-updated", stats);
+            }
+            Err(error) => {
+                let _ = background_app.emit(
+                    "library-error",
+                    serde_json::json!({ "error": error.to_string() }),
+                );
+            }
+        }
+    });
+    Ok(OrganizerStats::default())
+}
+
+#[tauri::command]
+async fn get_thumbnail(folder_path: String, photo_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base_path = PathBuf::from(shellexpand::tilde(&folder_path).to_string());
+        let photo_path = PathBuf::from(shellexpand::tilde(&photo_path).to_string());
+        if !photo_path.is_file() || !photo_path.starts_with(&base_path) {
+            return Err(format!(
+                "photo is outside the selected library: {}",
+                photo_path.display()
+            ));
+        }
+        generate_thumbnail(&photo_path, &base_path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| format!("thumbnail generation failed: {error}"))
     })
     .await
-    .map_err(|err| format!("library scan task failed: {err}"))?
+    .map_err(|error| format!("thumbnail task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -142,23 +213,6 @@ fn get_default_path() -> String {
         .into_iter()
         .next()
         .unwrap_or_else(|| format!("{home}/Pictures/VRChat/VRChat"))
-}
-
-#[tauri::command]
-fn log_frontend_diagnostic(
-    folder_path: String,
-    level: String,
-    event: String,
-    details: String,
-) -> Result<(), String> {
-    let expanded = shellexpand::tilde(&folder_path).to_string();
-    organizer_core::log_diagnostic(
-        &PathBuf::from(expanded),
-        &level,
-        &format!("frontend_{event}"),
-        &details,
-    )
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -333,9 +387,49 @@ fn has_undo(folder_path: String) -> bool {
     undo_path.exists()
 }
 
+fn collect_watch_paths(event: &Event, pending: &mut std::collections::HashSet<PathBuf>) {
+    if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+        return;
+    }
+
+    for path in &event.paths {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase());
+        if !matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg" | "webp"))
+            || path.components().any(|component| {
+                let name = component.as_os_str().to_string_lossy();
+                name == "Prints" || name == "vrchat-organizer-thumbnails" || name.starts_with('.')
+            })
+        {
+            continue;
+        }
+        pending.insert(path.clone());
+    }
+}
+
+fn watch_fingerprint(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+fn wait_for_stable_file(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let mut previous = None;
+    for _ in 0..20 {
+        let current = watch_fingerprint(path)?;
+        if previous.as_ref() == Some(&current) {
+            return Some(current);
+        }
+        previous = Some(current);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
+}
+
 /// Start watching the folder for new files and auto-organize them.
-/// Uses both filesystem events (recursive) + periodic polling every 5 seconds
-/// to handle Steam Proton/Wine where inotify events might not fire reliably.
+/// Filesystem notifications are batched briefly because a single capture is
+/// commonly reported as several create/modify events while it is written.
 #[tauri::command]
 async fn start_watching(
     app: AppHandle,
@@ -346,7 +440,6 @@ async fn start_watching(
     template: String,
     state: State<'_, WatcherState>,
 ) -> Result<String, String> {
-    // Prevent double start
     if state.running.load(Ordering::SeqCst) {
         return Err("already watching".to_string());
     }
@@ -358,7 +451,6 @@ async fn start_watching(
         return Err(format!("path does not exist: {}", expanded));
     }
 
-    // Build the config
     let config = OrganizerConfig {
         base_path: base_path.clone(),
         dry_run,
@@ -372,35 +464,8 @@ async fn start_watching(
     };
     validate_template(&config.template).map_err(|err| err.to_string())?;
 
-    // Always watch the base path recursively so all YYYY-MM subfolders are covered
     let watch_path = base_path.clone();
-
-    // Run an initial scan to organize any existing unorganized files first
-    let initial_app_handle = app.clone();
-    let initial_config = config.clone();
-    std::thread::spawn(move || {
-        let mut stats = OrganizerStats::default();
-        match organize_path(&initial_config, &mut stats) {
-            Ok(()) => {
-                let _ = initial_app_handle.emit(
-                    "watch-initial-scan",
-                    serde_json::json!({
-                      "stats": stats
-                    }),
-                );
-            }
-            Err(e) => {
-                let _ = initial_app_handle.emit(
-                    "watch-initial-scan",
-                    serde_json::json!({
-                      "error": e.to_string()
-                    }),
-                );
-            }
-        }
-    });
-
-    // Notify frontend
+    state.running.store(true, Ordering::SeqCst);
     let _ = app.emit(
         "watch-status",
         serde_json::json!({
@@ -409,9 +474,6 @@ async fn start_watching(
         }),
     );
 
-    state.running.store(true, Ordering::SeqCst);
-
-    // Create the watcher in a spawned blocking task
     let app_handle = app.clone();
     let watch_path_clone = watch_path.clone();
     let config_clone = config.clone();
@@ -428,11 +490,11 @@ async fn start_watching(
                 );
                 let state: State<WatcherState> = app_handle.state();
                 state.running.store(false, Ordering::SeqCst);
+                let _ = app_handle.emit("watch-status", serde_json::json!({"status": "stopped"}));
                 return;
             }
         };
 
-        // Watch recursively so files in YYYY-MM subfolders are detected
         if let Err(e) = watcher.watch(&watch_path_clone, RecursiveMode::Recursive) {
             let _ = app_handle.emit(
                 "watch-error",
@@ -440,159 +502,93 @@ async fn start_watching(
             );
             let state: State<WatcherState> = app_handle.state();
             state.running.store(false, Ordering::SeqCst);
+            let _ = app_handle.emit("watch-status", serde_json::json!({"status": "stopped"}));
             return;
         }
 
-        // Store watcher in state so it can be dropped later
-        let state: State<WatcherState> = app_handle.state();
-        *state.watcher.lock().unwrap() = Some(watcher);
+        // Finish the initial organization before consuming notifications. This
+        // prevents the watcher's own moves and metadata writes from becoming a
+        // second organization pass.
+        clear_cancel_request();
+        let mut initial_stats = OrganizerStats::default();
+        let initial_result = organize_path(&config_clone, &mut initial_stats);
+        let _ = app_handle.emit(
+            "watch-initial-scan",
+            match initial_result {
+                Ok(()) => serde_json::json!({"stats": initial_stats}),
+                Err(error) => serde_json::json!({"error": error.to_string()}),
+            },
+        );
+        while rx.try_recv().is_ok() {}
 
-        // Track already-known files to avoid re-processing from events
-        let mut known_files: HashSet<PathBuf> = HashSet::new();
-        for entry in walkdir::WalkDir::new(&watch_path_clone)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            known_files.insert(entry.into_path());
-        }
-
-        let mut poll_counter: u32 = 0;
-
-        // Event + Polling loop
+        let mut processed = std::collections::HashMap::new();
         loop {
-            // Check if we should stop
-            {
-                let state: State<WatcherState> = app_handle.state();
-                if !state.running.load(Ordering::SeqCst) {
-                    break;
-                }
+            let state: State<WatcherState> = app_handle.state();
+            if !state.running.load(Ordering::SeqCst) {
+                break;
             }
-
-            // Keep a slow fallback poll for filesystems that do not reliably emit
-            // events (notably some Proton/Wine setups). Normal changes are handled
-            // immediately by the watcher.
-            poll_counter += 1;
-            let should_poll = poll_counter >= 60;
 
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(event)) => {
-                    // Filter for file creation/modification events
-                    let is_relevant =
-                        matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_));
-                    if !is_relevant {
-                        continue;
+                    let mut pending = std::collections::HashSet::new();
+                    collect_watch_paths(&event, &mut pending);
+                    let deadline = Instant::now() + Duration::from_millis(700);
+                    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                        match rx.recv_timeout(remaining) {
+                            Ok(Ok(next)) => collect_watch_paths(&next, &mut pending),
+                            Ok(Err(error)) => {
+                                let _ = app_handle.emit(
+                                    "watch-error",
+                                    serde_json::json!({"error": error.to_string()}),
+                                );
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
                     }
 
-                    // Process only image files
-                    for path in &event.paths {
-                        let ext = path
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .map(str::to_ascii_lowercase)
-                            .unwrap_or_default();
-                        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+                    for path in pending {
+                        // Wait for the capture writer to finish. A create event
+                        // can arrive before the file is complete, and a move
+                        // event can refer to a path that no longer exists.
+                        let Some(fingerprint) = wait_for_stable_file(&path) else {
+                            continue;
+                        };
+                        if processed.get(&path) == Some(&fingerprint) {
                             continue;
                         }
-                        // Skip if we already know about this file
-                        if known_files.contains(path) {
-                            continue;
-                        }
-                        known_files.insert(path.clone());
-
-                        // Small delay to let the file finish writing
-                        std::thread::sleep(Duration::from_millis(500));
-
-                        // Run organize on this single file, preserving its YYYY-MM parent folder
                         let mut stats = OrganizerStats::default();
-                        if let Err(e) = organize_single_file(path, &config_clone, &mut stats) {
-                            let _ = app_handle.emit(
-                                "watch-error",
-                                serde_json::json!({
-                                  "error": e.to_string(),
-                                  "file": path.to_string_lossy()
-                                }),
-                            );
-                        } else {
-                            let _ = app_handle.emit(
-                                "watch-organized",
-                                serde_json::json!({
-                                  "stats": stats,
-                                  "file": path.to_string_lossy()
-                                }),
-                            );
+                        match organize_single_file(&path, &config_clone, &mut stats) {
+                            Ok(()) if stats.organized > 0 || stats.no_metadata > 0 => {
+                                let _ = app_handle.emit(
+                                    "watch-organized",
+                                    serde_json::json!({
+                                        "stats": stats,
+                                        "file": path.to_string_lossy()
+                                    }),
+                                );
+                            }
+                            Ok(()) => {}
+                            Err(error) => {
+                                let _ = app_handle.emit(
+                                    "watch-error",
+                                    serde_json::json!({
+                                        "error": error.to_string(),
+                                        "file": path.to_string_lossy()
+                                    }),
+                                );
+                            }
                         }
+                        processed.insert(path, fingerprint);
                     }
                 }
                 Ok(Err(e)) => {
                     let _ =
                         app_handle.emit("watch-error", serde_json::json!({"error": e.to_string()}));
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // Normal timeout — proceed to check polling
-                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     break;
-                }
-            }
-
-            // Periodic fallback poll: every ~30 seconds, scan for new files
-            // that might have been missed without adding another full scan to
-            // the normal watcher path.
-            if should_poll {
-                poll_counter = 0;
-                let mut new_files_found = false;
-
-                for entry in walkdir::WalkDir::new(&watch_path_clone)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                {
-                    let path = entry.into_path();
-                    let ext = path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(str::to_ascii_lowercase)
-                        .unwrap_or_default();
-                    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-                        continue;
-                    }
-                    if known_files.insert(path.clone()) {
-                        // New file found via polling!
-                        new_files_found = true;
-
-                        // Run organize on this single file, preserving its YYYY-MM parent folder
-                        let mut stats = OrganizerStats::default();
-                        if let Err(e) = organize_single_file(&path, &config_clone, &mut stats) {
-                            let _ = app_handle.emit(
-                                "watch-error",
-                                serde_json::json!({
-                                  "error": e.to_string(),
-                                  "file": path.to_string_lossy()
-                                }),
-                            );
-                        } else {
-                            let _ = app_handle.emit(
-                                "watch-organized",
-                                serde_json::json!({
-                                  "stats": stats,
-                                  "file": path.to_string_lossy()
-                                }),
-                            );
-                        }
-                    }
-                }
-
-                // Even if no new files were found, emit a status heartbeat so frontend knows
-                // the watcher is alive. Only do this if no new files were processed.
-                if !new_files_found {
-                    let _ = app_handle.emit(
-                        "watch-status",
-                        serde_json::json!({
-                          "status": "heartbeat",
-                          "path": watch_path_clone.to_string_lossy()
-                        }),
-                    );
                 }
             }
         }
@@ -605,11 +601,6 @@ async fn start_watching(
 #[tauri::command]
 fn stop_watching(app: AppHandle, state: State<'_, WatcherState>) -> Result<String, String> {
     state.running.store(false, Ordering::SeqCst);
-
-    // Drop the watcher to release file handles
-    if let Some(watcher) = state.watcher.lock().unwrap().take() {
-        drop(watcher);
-    }
 
     let _ = app.emit("watch-status", serde_json::json!({"status": "stopped"}));
 
@@ -627,16 +618,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState {
-            watcher: Mutex::new(None),
             running: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             organize_folder,
+            cancel_scan,
             simulate_folder,
             get_activity,
             get_library,
+            get_thumbnail,
             get_default_path,
-            log_frontend_diagnostic,
             open_photo_location,
             copy_photo_path,
             add_photos_to_collection,
@@ -648,16 +639,6 @@ pub fn run() {
             is_watching,
             get_vrchat_status,
         ])
-        .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
-            Ok(())
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -25,6 +25,33 @@ Metadata (world name, software) is extracted **without any external dependencies
   - Keywords: `Software`, `Creator Tool` — software name
 - **WebP** — Dimensions only (no EXIF/text chunk metadata supported yet)
 
+## Library classification
+
+The Library keeps organisation views separate from the photo collection:
+
+- **All worlds** contains only real, non-placeholder world names that have at
+  least two photos. World groups and their counts are derived from the current
+  library data each time it is scanned, so a group moves between views as
+  photos are added or removed.
+- **All images** contains every other photo, including photos without world
+  metadata, placeholder names such as `Unsorted` or `Unknown World`, names
+  that look like screenshot filenames, and one-photo worlds.
+- **Current session** contains captures taken since the currently running
+  VRChat process started. When VRChat is already open at Organizer startup,
+  or transitions from closed to open while Organizer is running, Library
+  switches to this tab automatically. It is empty while VRChat is closed.
+
+Missing metadata is represented as no world information rather than a filename
+or a synthetic `Unsorted` world. No files are moved, renamed, or deleted by
+this classification; it only changes how the existing library is displayed.
+The Timeline still includes every photo.
+
+The desktop Library stores one SQLite row per photo in the application data
+directory (`library.sqlite`). Startup uses unchanged rows immediately and
+rescans only new or changed files in the background. PNG metadata reads only
+the signature, chunk headers, and text chunks before `IDAT`; pixel decoding is
+reserved for generating a cached 320px JPEG thumbnail.
+
 ## Build & Run
 
 ### CLI Tool
@@ -103,7 +130,7 @@ cd rust-rewrite
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
-`release/v2.0.1/` (with the version read from Cargo metadata).
+`release/v2.0.2/` (with the version read from Cargo metadata).
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
 The Windows cross-compilation helper uses the same versioned release directory:
@@ -112,8 +139,11 @@ The Windows cross-compilation helper uses the same versioned release directory:
 ./build-windows.sh
 ```
 
-It produces `release/v2.0.1/VRChatOrganizer-2.0.1-windows-x86_64.exe` and
+It produces `release/v2.0.2/VRChatOrganizer-2.0.2-windows-x86_64.exe` and
 updates `SHA256SUMS` for all generated release binaries.
+This is the standalone Windows CLI executable; the Tauri GUI executable and
+NSIS/MSI installers must be built natively on Windows or by the Windows CI
+runner because they require the native WebView2 toolchain.
 
 For a local development cycle:
 
@@ -138,9 +168,3 @@ cargo build --workspace --release
 - **Simulation mode:** use **Settings → Preview organization** to run a
   no-write scan. The returned preview includes planned moves and files skipped
   because metadata is missing.
-- **Activity diagnostics:** completed scans and simulations append bounded,
-  atomic records to `.vrchat-organizer-activity.json` in the selected library.
-  Records include status, duration, file counts, and a compact summary.
-- **Detailed troubleshooting:** `.vrchat-organizer.log` is a line-oriented
-  diagnostic log containing scan mode, start/end times, durations, counts, and
-  file-level failures. Attach it when reporting a problem.

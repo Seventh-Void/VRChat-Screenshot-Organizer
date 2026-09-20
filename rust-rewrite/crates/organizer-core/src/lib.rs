@@ -1,16 +1,128 @@
 use anyhow::{Context, Result};
+use fast_image_resize::{images::Image as ResizeImage, pixels::PixelType, Resizer};
 use flate2::read::ZlibDecoder;
+use rayon::prelude::*;
 use regex::Regex;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
-use std::io::Write;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock, TryLockError};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
+
+#[derive(Debug, Clone)]
+struct CachedPhoto {
+    size_bytes: u64,
+    modified_secs: u64,
+    photo: LibraryPhoto,
+}
+
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+static MONTH_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+static ORGANIZATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const PLACEHOLDER_WORLD_PATTERNS: &[&str] = &[
+    "capture",
+    "screenshot",
+    "vrchat_",
+    "new folder",
+    "unsorted",
+    "unknown",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+];
+
+pub fn clear_cancel_request() {
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+pub fn request_cancel() {
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+fn cancel_requested() -> bool {
+    CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+fn is_month_folder(name: &str) -> bool {
+    MONTH_RE
+        .get_or_init(|| Regex::new(r"^\d{4}-\d{2}$").unwrap())
+        .is_match(name)
+}
+
+/// Classify a library photo using embedded metadata first and the recognized
+/// on-disk layout as a fallback.
+///
+/// `relative` must be relative to the scan root. A file name is never a
+/// classification: only a directory component can be a world. During a full
+/// scan the fallback layout is `YYYY-MM/<world>/<file>`; during a month-root
+/// scan it is `<world>/<file>`.
+fn is_placeholder_world_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized.is_empty()
+        || PLACEHOLDER_WORLD_PATTERNS.iter().any(|pattern| {
+            normalized == *pattern
+                || normalized.starts_with(pattern)
+                || normalized.ends_with(pattern)
+        })
+}
+
+/// Classify a photo into a world only when the folder is a credible world
+/// group. Both metadata and path fallback require at least two sibling images
+/// and a non-placeholder world name.
+pub fn classify_world(
+    relative: &Path,
+    metadata_world: Option<&str>,
+    scan_all_months: bool,
+    world_file_count: usize,
+) -> Option<String> {
+    if let Some(world) = metadata_world.map(str::trim).filter(|world| {
+        !is_placeholder_world_name(world) && *world != "Prints" && !world.starts_with('.')
+    }) {
+        if world_file_count >= 2 {
+            return Some(world.to_owned());
+        }
+        return None;
+    }
+
+    let components: Vec<String> = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
+        .collect();
+    if components.len() < 2 {
+        return None;
+    }
+
+    if scan_all_months {
+        return components
+            .first()
+            .filter(|month| is_month_folder(month))
+            .and_then(|_| components.get(1))
+            .filter(|name| {
+                world_file_count >= 2
+                    && !is_placeholder_world_name(name)
+                    && *name != "Prints"
+                    && !name.starts_with('.')
+            })
+            .cloned();
+    }
+
+    components
+        .first()
+        .filter(|name| {
+            world_file_count >= 2
+                && !is_placeholder_world_name(name)
+                && *name != "Prints"
+                && !name.starts_with('.')
+        })
+        .cloned()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageMeta {
@@ -31,34 +143,24 @@ pub fn scan_library_with_options(
     base_path: &Path,
     scan_all_months: bool,
 ) -> Result<OrganizerStats> {
-    if let Err(error) = log_diagnostic(
-        base_path,
-        "INFO",
-        "library_scan_started",
-        &format!("scan_all_months={scan_all_months}"),
-    ) {
-        eprintln!("diagnostic log unavailable: {error}");
-    }
-    let details = scan_library_details_with_options(base_path, scan_all_months)?;
+    scan_library_with_cache(base_path, scan_all_months, None)
+}
+
+pub fn scan_library_with_cache(
+    base_path: &Path,
+    scan_all_months: bool,
+    cache_path: Option<&Path>,
+) -> Result<OrganizerStats> {
+    let (details, unorganized_photos) =
+        scan_library_partition_with_options(base_path, scan_all_months, cache_path)?;
     let mut stats = OrganizerStats::default();
     for world in &details {
         stats.total += world.photos.len();
         stats.worlds.insert(world.name.clone(), world.photos.len());
     }
+    stats.total += unorganized_photos.len();
     stats.world_details = details;
-    if let Err(error) = log_diagnostic(
-        base_path,
-        "INFO",
-        "library_scan_finished",
-        &format!(
-            "scan_all_months={} worlds={} photos={}",
-            scan_all_months,
-            stats.world_details.len(),
-            stats.total
-        ),
-    ) {
-        eprintln!("diagnostic log unavailable: {error}");
-    }
+    stats.unorganized_photos = unorganized_photos;
     Ok(stats)
 }
 
@@ -70,6 +172,9 @@ pub struct LibraryPhoto {
     pub captured_at: Option<u64>,
     pub world_name: Option<String>,
     pub participants: Vec<String>,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +185,191 @@ pub struct LibraryWorld {
     pub last_capture: Option<u64>,
 }
 
+fn load_cache(path: &Path) -> Result<HashMap<String, CachedPhoto>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let connection = Connection::open(path)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS photos (
+            path TEXT PRIMARY KEY,
+            size_bytes INTEGER NOT NULL,
+            modified_secs INTEGER NOT NULL,
+            world_name TEXT,
+            captured_at INTEGER,
+            participants TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            thumbnail_path TEXT NOT NULL
+        );",
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT path,size_bytes,modified_secs,world_name,captured_at,participants,width,height,thumbnail_path FROM photos",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut result = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let path: String = row.get(0)?;
+        let participants =
+            serde_json::from_str(row.get::<_, String>(5)?.as_str()).unwrap_or_default();
+        result.insert(
+            path.clone(),
+            CachedPhoto {
+                size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
+                modified_secs: row.get::<_, i64>(2)?.max(0) as u64,
+                photo: LibraryPhoto {
+                    path,
+                    thumbnail_path: row.get(8)?,
+                    captured_at: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                    world_name: row.get(3)?,
+                    participants,
+                    width: row.get::<_, i64>(6)?.max(0) as u32,
+                    height: row.get::<_, i64>(7)?.max(0) as u32,
+                    size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
+                },
+            },
+        );
+    }
+    Ok(result)
+}
+
+pub fn cached_library(
+    path: &Path,
+    base_path: &Path,
+    scan_all_months: bool,
+) -> Result<Option<OrganizerStats>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let cached = load_cache(path)?;
+    if cached.is_empty() {
+        return Ok(None);
+    }
+    let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
+    let mut unorganized = Vec::new();
+    for entry in cached
+        .into_values()
+        .filter(|entry| Path::new(&entry.photo.path).starts_with(base_path))
+    {
+        let relative = Path::new(&entry.photo.path)
+            .strip_prefix(base_path)
+            .unwrap_or_else(|_| Path::new(""));
+        let cached_relative = if !scan_all_months {
+            let components: Vec<_> = relative.components().collect();
+            if components
+                .first()
+                .and_then(|component| component.as_os_str().to_str())
+                .map(is_month_folder)
+                .unwrap_or(false)
+            {
+                components[1..].iter().collect::<PathBuf>()
+            } else {
+                relative.to_path_buf()
+            }
+        } else {
+            relative.to_path_buf()
+        };
+        if let Some(world) = classify_world(
+            &cached_relative,
+            entry.photo.world_name.as_deref(),
+            scan_all_months,
+            2,
+        ) {
+            worlds.entry(world).or_default().push(entry.photo);
+        } else {
+            unorganized.push(entry.photo);
+        }
+    }
+    let mut stats = OrganizerStats::default();
+    for (name, mut photos) in worlds {
+        if photos.len() < 2 {
+            unorganized.append(&mut photos);
+            continue;
+        }
+        photos.sort_by_key(|photo| std::cmp::Reverse(photo.captured_at.unwrap_or(0)));
+        stats.total += photos.len();
+        stats.worlds.insert(name.clone(), photos.len());
+        stats.world_details.push(LibraryWorld {
+            name,
+            last_capture: photos.first().and_then(|photo| photo.captured_at),
+            photos,
+        });
+    }
+    unorganized.sort_by_key(|photo| std::cmp::Reverse(photo.captured_at.unwrap_or(0)));
+    stats.total += unorganized.len();
+    stats.unorganized_photos = unorganized;
+    stats
+        .world_details
+        .sort_by_key(|world| std::cmp::Reverse(world.last_capture.unwrap_or(0)));
+    Ok(Some(stats))
+}
+
+fn save_cache(
+    path: &Path,
+    candidates: &[(Option<String>, LibraryPhoto)],
+    files: &[(PathBuf, u64, u64, PathBuf)],
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut connection = Connection::open(path)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS photos (
+            path TEXT PRIMARY KEY,
+            size_bytes INTEGER NOT NULL,
+            modified_secs INTEGER NOT NULL,
+            world_name TEXT,
+            captured_at INTEGER,
+            participants TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            thumbnail_path TEXT NOT NULL
+        );",
+    )?;
+    let transaction = connection.transaction()?;
+    for (_, photo) in candidates {
+        let modified_secs = files
+            .iter()
+            .find(|(path, _, _, _)| path.to_string_lossy() == photo.path)
+            .map(|(_, _, modified, _)| *modified)
+            .unwrap_or_default();
+        transaction.execute(
+            "INSERT OR REPLACE INTO photos
+             (path,size_bytes,modified_secs,world_name,captured_at,participants,width,height,thumbnail_path)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                photo.path,
+                photo.size_bytes as i64,
+                modified_secs as i64,
+                photo.world_name,
+                photo.captured_at.map(|value| value as i64),
+                serde_json::to_string(&photo.participants)?,
+                photo.width as i64,
+                photo.height as i64,
+                photo.thumbnail_path,
+            ],
+        )?;
+    }
+    let paths: std::collections::HashSet<&str> = candidates
+        .iter()
+        .map(|(_, photo)| photo.path.as_str())
+        .collect();
+    let mut stale = transaction.prepare("SELECT path FROM photos")?;
+    let stale_paths: Vec<String> = stale
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?
+        .into_iter()
+        .filter(|path| !paths.contains(path.as_str()))
+        .collect();
+    drop(stale);
+    for stale_path in stale_paths {
+        transaction.execute("DELETE FROM photos WHERE path = ?1", [stale_path])?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn scan_library_details(base_path: &Path) -> Result<Vec<LibraryWorld>> {
     scan_library_details_with_options(base_path, false)
 }
@@ -88,15 +378,30 @@ pub fn scan_library_details_with_options(
     base_path: &Path,
     scan_all_months: bool,
 ) -> Result<Vec<LibraryWorld>> {
+    Ok(scan_library_partition_with_options(base_path, scan_all_months, None)?.0)
+}
+
+fn scan_library_partition_with_options(
+    base_path: &Path,
+    scan_all_months: bool,
+    cache_path: Option<&Path>,
+) -> Result<(Vec<LibraryWorld>, Vec<LibraryPhoto>)> {
     if !base_path.is_dir() {
         anyhow::bail!("path does not exist: {}", base_path.display());
     }
 
     let roots = library_roots(base_path, scan_all_months)?;
-    let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
+    let cached = cache_path.map(load_cache).transpose()?.unwrap_or_default();
+    let mut candidates = Vec::new();
+    let mut files = Vec::new();
 
     for root in roots {
-        for item in WalkDir::new(&root)
+        let walker = if !scan_all_months && root == *base_path {
+            WalkDir::new(&root).max_depth(1)
+        } else {
+            WalkDir::new(&root)
+        };
+        for item in walker
             .into_iter()
             .filter_map(|item| item.ok())
             .filter(|item| item.file_type().is_file())
@@ -104,54 +409,100 @@ pub fn scan_library_details_with_options(
             .filter(|item| !is_ignored_path(item.path()))
         {
             let path = item.path().to_path_buf();
-            let filesystem_captured_at = item
-                .metadata()
+            let metadata = item.metadata()?;
+            let modified_secs = metadata
+                .modified()
                 .ok()
-                .and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs());
-            let metadata = extract_image_meta(&path).ok();
-            let relative = path.strip_prefix(&root).unwrap_or(&path);
-            let first_component = relative.components().next().and_then(|component| {
-                let component = component.as_os_str();
-                let is_file = component == path.file_name().unwrap_or_default();
-                (!is_file).then(|| component.to_string_lossy().into_owned())
-            });
-            let world = first_component
-                .filter(|name| name != "Prints" && !name.starts_with('.'))
-                .or_else(|| metadata.as_ref().and_then(|meta| meta.world_name.clone()))
-                .unwrap_or_else(|| "Unsorted".to_string());
-            if world == "Prints" || world.starts_with('.') {
-                continue;
+                .map(|duration| duration.as_secs())
+                .unwrap_or_default();
+            files.push((path, metadata.len(), modified_secs, root.clone()));
+        }
+    }
+    let processed: Vec<_> = files
+        .par_iter()
+        .map(|(path, size_bytes, modified_secs, root)| {
+            if let Some(cached) = cached.get(&path.to_string_lossy().into_owned()) {
+                if cached.size_bytes == *size_bytes && cached.modified_secs == *modified_secs {
+                    return Ok((
+                        path.clone(),
+                        *size_bytes,
+                        *modified_secs,
+                        root.clone(),
+                        cached.photo.clone(),
+                    ));
+                }
             }
+            let metadata = extract_image_meta(path).ok();
+            let filesystem_captured_at = Some(*modified_secs);
             let captured_at = metadata
                 .as_ref()
                 .and_then(|meta| meta.captured_at)
                 .or(filesystem_captured_at);
-            let thumbnail_path = match thumbnail_for(&path, base_path, captured_at) {
-                Ok(path) => path.to_string_lossy().into_owned(),
-                Err(error) => {
-                    eprintln!(
-                        "thumbnail generation failed for {}: {error}",
-                        path.display()
-                    );
-                    String::new()
-                }
-            };
-            worlds.entry(world).or_default().push(LibraryPhoto {
+            if cancel_requested() {
+                anyhow::bail!("scan cancelled");
+            }
+            let photo = LibraryPhoto {
                 path: path.to_string_lossy().into_owned(),
-                thumbnail_path,
+                thumbnail_path: String::new(),
                 captured_at,
                 world_name: metadata.as_ref().and_then(|meta| meta.world_name.clone()),
                 participants: metadata
                     .as_ref()
                     .map(|meta| meta.participants.clone())
                     .unwrap_or_default(),
-            });
+                width: metadata.as_ref().map(|meta| meta.width).unwrap_or_default(),
+                height: metadata
+                    .as_ref()
+                    .map(|meta| meta.height)
+                    .unwrap_or_default(),
+                size_bytes: *size_bytes,
+            };
+            Ok((
+                path.clone(),
+                *size_bytes,
+                *modified_secs,
+                root.clone(),
+                photo,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (path, size_bytes, modified_secs, root, mut photo) in processed {
+        if photo.thumbnail_path.is_empty() {
+            photo.thumbnail_path = thumbnail_path_for(&path, base_path, Some(modified_secs))
+                .to_string_lossy()
+                .into_owned();
+        }
+        let relative = path.strip_prefix(&root).unwrap_or(&path);
+        let world = classify_world(relative, photo.world_name.as_deref(), scan_all_months, 2);
+        candidates.push((world, photo.clone()));
+        if let Some(cache_path) = cache_path {
+            // Cache writes are batched after classification below.
+            let _ = (cache_path, size_bytes, modified_secs);
         }
     }
+    if let Some(cache_path) = cache_path {
+        save_cache(cache_path, &candidates, &files)?;
+    }
 
-    let mut result: Vec<LibraryWorld> = worlds
+    let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
+    let mut unorganized_photos = Vec::new();
+    for (world, photo) in candidates {
+        if let Some(world) = world {
+            worlds.entry(world).or_default().push(photo);
+        } else {
+            unorganized_photos.push(photo);
+        }
+    }
+    let mut qualifying_worlds = HashMap::new();
+    for (name, photos) in worlds {
+        if photos.len() >= 2 {
+            qualifying_worlds.insert(name, photos);
+        } else {
+            unorganized_photos.extend(photos);
+        }
+    }
+    let mut result: Vec<LibraryWorld> = qualifying_worlds
         .into_iter()
         .map(|(name, mut photos)| {
             photos.sort_by_key(|photo| std::cmp::Reverse(photo.captured_at.unwrap_or(0)));
@@ -164,56 +515,41 @@ pub fn scan_library_details_with_options(
         })
         .collect();
     result.sort_by_key(|world| std::cmp::Reverse(world.last_capture.unwrap_or(0)));
-    Ok(result)
+    unorganized_photos.sort_by_key(|photo| std::cmp::Reverse(photo.captured_at.unwrap_or(0)));
+    Ok((result, unorganized_photos))
 }
 
 fn library_roots(base_path: &Path, scan_all_months: bool) -> Result<Vec<PathBuf>> {
-    static MONTH_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let month_re = MONTH_RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}$").unwrap());
     let mut roots = Vec::new();
     for entry in fs::read_dir(base_path)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() && month_re.is_match(&entry.file_name().to_string_lossy()) {
+        if entry.file_type()?.is_dir() && is_month_folder(&entry.file_name().to_string_lossy()) {
             roots.push(entry.path());
         }
     }
-    if roots.is_empty() {
-        roots.push(base_path.to_path_buf());
+    if scan_all_months {
+        // Scan from the selected root so root-level captures and every month
+        // folder are indexed in one traversal.
+        return Ok(vec![base_path.to_path_buf()]);
+    }
+    let has_month_folders = !roots.is_empty();
+    if !has_month_folders {
+        return Ok(vec![base_path.to_path_buf()]);
     }
     roots.sort();
     roots.dedup();
-    if !scan_all_months {
-        if let Some(latest) = roots.pop() {
-            roots.clear();
-            roots.push(latest);
-        }
+    if let Some(latest) = roots.pop() {
+        roots.clear();
+        roots.push(base_path.to_path_buf());
+        roots.push(latest);
     }
     Ok(roots)
 }
 
-pub fn log_diagnostic(base_path: &Path, level: &str, event: &str, details: &str) -> Result<()> {
-    let path = base_path.join(".vrchat-organizer.log");
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-    writeln!(
-        file,
-        "{} level={} event={} {}",
-        chrono::Utc::now().to_rfc3339(),
-        level,
-        event,
-        details
-    )?;
-    file.flush()?;
-    Ok(())
-}
-
 fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result<PathBuf> {
+    let target = thumbnail_path_for(path, base_path, modified);
     let cache = base_path.join("vrchat-organizer-thumbnails");
     fs::create_dir_all(&cache)?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    "thumbnail-v2-320".hash(&mut hasher);
-    path.to_string_lossy().hash(&mut hasher);
-    modified.hash(&mut hasher);
-    let target = cache.join(format!("{:x}.jpg", hasher.finish()));
     if target
         .metadata()
         .map(|metadata| metadata.len() > 0)
@@ -221,17 +557,61 @@ fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result
     {
         return Ok(target);
     }
+
+    let thumbnail = match image::ImageReader::open(path)
+        .ok()
+        .and_then(|reader| reader.decode().ok())
     {
-        let image = image::ImageReader::open(path)?.decode()?;
-        let thumbnail = image.thumbnail(320, 320);
-        let temporary = target.with_extension("jpg.tmp");
-        let mut output = fs::File::create(&temporary)?;
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 75);
-        encoder.encode_image(&thumbnail)?;
-        output.sync_all()?;
-        fs::rename(temporary, &target)?;
-    }
+        Some(image) => {
+            let rgb = image.to_rgb8();
+            let scale = (320.0 / rgb.width() as f32)
+                .min(320.0 / rgb.height() as f32)
+                .min(1.0);
+            let width = ((rgb.width() as f32 * scale).round() as u32).max(1);
+            let height = ((rgb.height() as f32 * scale).round() as u32).max(1);
+            let source = ResizeImage::from_vec_u8(
+                rgb.width(),
+                rgb.height(),
+                rgb.into_raw(),
+                PixelType::U8x3,
+            )?;
+            let mut destination = ResizeImage::new(width, height, PixelType::U8x3);
+            Resizer::new().resize(&source, &mut destination, None)?;
+            image::RgbImage::from_raw(width, height, destination.into_vec())
+                .map(image::DynamicImage::ImageRgb8)
+                .context("thumbnail resize returned an invalid buffer")?
+        }
+        None => image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            320,
+            180,
+            image::Rgb([32, 26, 48]),
+        )),
+    };
+    let temporary = target.with_extension("jpg.tmp");
+    let mut output = fs::File::create(&temporary)?;
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 75);
+    encoder.encode_image(&thumbnail)?;
+    output.sync_all()?;
+    fs::rename(temporary, &target)?;
     Ok(target)
+}
+
+pub fn generate_thumbnail(path: &Path, base_path: &Path) -> Result<PathBuf> {
+    let modified = fs::metadata(path)?
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    thumbnail_for(path, base_path, modified)
+}
+
+pub fn thumbnail_path_for(path: &Path, base_path: &Path, modified: Option<u64>) -> PathBuf {
+    let cache = base_path.join("vrchat-organizer-thumbnails");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "thumbnail-v2-320".hash(&mut hasher);
+    path.to_string_lossy().hash(&mut hasher);
+    modified.hash(&mut hasher);
+    cache.join(format!("{:x}.jpg", hasher.finish()))
 }
 
 fn is_image_path(path: &Path) -> bool {
@@ -275,6 +655,8 @@ pub struct OrganizerStats {
     pub worlds: HashMap<String, usize>,
     #[serde(default)]
     pub world_details: Vec<LibraryWorld>,
+    #[serde(default)]
+    pub unorganized_photos: Vec<LibraryPhoto>,
     pub preview: Vec<String>,
 }
 
@@ -603,8 +985,85 @@ struct PngTextEntry {
     value: String,
 }
 
-/// Read PNG file and extract all text chunks (tEXt, zTXt, iTXt).
+/// Read PNG text chunks without touching IDAT pixel data.
 fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut signature = [0u8; 8];
+    reader.read_exact(&mut signature)?;
+    if signature != [137, 80, 78, 71, 13, 10, 26, 10] {
+        anyhow::bail!("not a valid PNG file");
+    }
+    let mut entries = Vec::new();
+    loop {
+        let mut header = [0u8; 8];
+        if reader.read_exact(&mut header).is_err() {
+            break;
+        }
+        let chunk_len = u32::from_be_bytes(header[..4].try_into().unwrap()) as u64;
+        let chunk_type = &header[4..8];
+        if chunk_type == b"IDAT" {
+            break;
+        }
+        if chunk_type == b"IEND" {
+            break;
+        }
+        if chunk_type == b"tEXt" || chunk_type == b"zTXt" || chunk_type == b"iTXt" {
+            if chunk_len > 16 * 1024 * 1024 {
+                anyhow::bail!("PNG text chunk is too large");
+            }
+            let mut data = vec![0u8; chunk_len as usize];
+            reader.read_exact(&mut data)?;
+            if let Some(null_pos) = data.iter().position(|&byte| byte == 0) {
+                let keyword = String::from_utf8_lossy(&data[..null_pos]).into_owned();
+                let raw_value = &data[null_pos + 1..];
+                let value = match chunk_type {
+                    b"tEXt" => raw_value.iter().map(|&byte| byte as char).collect(),
+                    b"zTXt" if !raw_value.is_empty() => {
+                        let mut value = String::new();
+                        let _ = ZlibDecoder::new(&raw_value[1..]).read_to_string(&mut value);
+                        value
+                    }
+                    b"iTXt" if raw_value.len() >= 2 => {
+                        let after_flags = &raw_value[2..];
+                        let after_lang = after_flags
+                            .iter()
+                            .position(|&byte| byte == 0)
+                            .map(|index| &after_flags[index + 1..]);
+                        let text = after_lang.and_then(|value| {
+                            value
+                                .iter()
+                                .position(|&byte| byte == 0)
+                                .map(|index| &value[index + 1..])
+                        });
+                        match text {
+                            Some(text) if raw_value[0] == 0 => {
+                                String::from_utf8_lossy(text).into_owned()
+                            }
+                            Some(text) => {
+                                let mut value = String::new();
+                                let _ = ZlibDecoder::new(text).read_to_string(&mut value);
+                                value
+                            }
+                            None => String::new(),
+                        }
+                    }
+                    _ => String::new(),
+                };
+                entries.push(PngTextEntry { keyword, value });
+            }
+        } else {
+            reader.seek(SeekFrom::Current(chunk_len as i64))?;
+        }
+        reader.seek(SeekFrom::Current(4))?;
+    }
+    if entries.is_empty() {
+        return extract_png_text_chunks_full(path);
+    }
+    Ok(entries)
+}
+
+fn extract_png_text_chunks_full(path: &Path) -> Result<Vec<PngTextEntry>> {
     let data = fs::read(path).context("failed to read PNG file")?;
 
     // PNG signature check
@@ -838,19 +1297,30 @@ fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>, Vec<String
 }
 
 pub fn extract_image_meta(path: &Path) -> Result<ImageMeta> {
-    // Use `into_dimensions()` which reads only the image header rather than
-    // decoding the full pixel data — significantly faster for large screenshots.
-    let reader = image::ImageReader::open(path)
-        .with_context(|| format!("failed to open image {}", path.display()))?;
-    let (width, height) = reader
-        .into_dimensions()
-        .with_context(|| format!("failed to read image dimensions for {}", path.display()))?;
-
     // Determine file extension
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_lowercase());
+    let (width, height) = if ext.as_deref() == Some("png") {
+        let mut reader = BufReader::new(fs::File::open(path)?);
+        let mut signature = [0u8; 8];
+        let mut ihdr = [0u8; 25];
+        reader.read_exact(&mut signature)?;
+        reader.read_exact(&mut ihdr)?;
+        if &ihdr[4..8] != b"IHDR" {
+            anyhow::bail!("PNG is missing IHDR");
+        }
+        (
+            u32::from_be_bytes(ihdr[8..12].try_into().unwrap()),
+            u32::from_be_bytes(ihdr[12..16].try_into().unwrap()),
+        )
+    } else {
+        image::ImageReader::open(path)
+            .with_context(|| format!("failed to open image {}", path.display()))?
+            .into_dimensions()
+            .with_context(|| format!("failed to read image dimensions for {}", path.display()))?
+    };
 
     let (world_name, software, participants) = match ext.as_deref() {
         Some("jpg") | Some("jpeg") => {
@@ -926,18 +1396,25 @@ fn determine_month_folder(file_path: &Path, config: &OrganizerConfig) -> PathBuf
 }
 
 pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Result<()> {
-    let started = std::time::Instant::now();
-    if let Err(error) = log_diagnostic(
-        &config.base_path,
-        "INFO",
-        "scan_started",
-        &format!(
-            "dry_run={} scan_all_months={} single_folder={} template={}",
-            config.dry_run, config.scan_all_months, config.single_folder, config.template
-        ),
-    ) {
-        eprintln!("diagnostic log unavailable: {error}");
+    let organization_lock = ORGANIZATION_LOCK.get_or_init(|| Mutex::new(()));
+    let _organization_guard = loop {
+        match organization_lock.try_lock() {
+            Ok(guard) => break guard,
+            Err(TryLockError::WouldBlock) => {
+                if cancel_requested() {
+                    anyhow::bail!("scan cancelled");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                anyhow::bail!("organization lock is poisoned");
+            }
+        }
+    };
+    if cancel_requested() {
+        anyhow::bail!("scan cancelled");
     }
+    let started = std::time::Instant::now();
     validate_template(&config.template)?;
     if !config.base_path.exists() {
         anyhow::bail!("path does not exist: {}", config.base_path.display());
@@ -948,11 +1425,9 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    // Compile once — used to detect YYYY-MM month folder names.
-    static MONTH_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let month_re = MONTH_RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}$").unwrap());
-
-    if config.single_folder {
+    if config.single_folder || config.scan_all_months {
+        // A full scan starts at the selected root so captures sitting beside
+        // month folders are included as well.
         candidates.push(config.base_path.clone());
     } else {
         for entry in fs::read_dir(&config.base_path)? {
@@ -963,16 +1438,14 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
-                if month_re.is_match(name) {
+                if is_month_folder(name) {
                     candidates.push(path);
                 }
             }
         }
         candidates.sort();
-        if !config.scan_all_months {
-            if let Some(last) = candidates.last() {
-                candidates = vec![last.clone()];
-            }
+        if let Some(last) = candidates.last() {
+            candidates = vec![last.clone()];
         }
         if candidates.is_empty() {
             // A picked folder may contain screenshots directly (including a
@@ -983,7 +1456,34 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
     }
 
     for folder in candidates {
+        if cancel_requested() {
+            anyhow::bail!("scan cancelled");
+        }
         process_folder(&folder, config, stats)?;
+    }
+
+    if !config.single_folder && !config.scan_all_months {
+        // Process root-level captures after the selected month traversal so a
+        // moved root file cannot be discovered a second time in the same run.
+        let mut root_files = Vec::new();
+        for entry in fs::read_dir(&config.base_path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && is_image_path(&entry.path())
+                && !is_ignored_path(&entry.path())
+            {
+                root_files.push(entry.path());
+            }
+        }
+        root_files.sort();
+        for image_file in root_files {
+            if cancel_requested() {
+                anyhow::bail!("scan cancelled");
+            }
+            if let Err(error) = organize_single_file_unlocked(&image_file, config, stats) {
+                eprintln!("error processing {}: {error}", image_file.display());
+            }
+        }
     }
 
     let status = if stats.errors == 0 {
@@ -1010,23 +1510,6 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
         },
     )
     .context("failed to write activity log")?;
-    if let Err(error) = log_diagnostic(
-        &config.base_path,
-        if stats.errors == 0 { "INFO" } else { "WARN" },
-        "scan_finished",
-        &format!(
-            "status={} duration_ms={} processed={} organized={} skipped={} no_metadata={} errors={}",
-            status,
-            started.elapsed().as_millis(),
-            stats.processed,
-            stats.organized,
-            stats.already_organized,
-            stats.no_metadata,
-            stats.errors
-        ),
-    ) {
-        eprintln!("diagnostic log unavailable: {error}");
-    }
     Ok(())
 }
 
@@ -1072,15 +1555,35 @@ pub fn organize_single_file(
     config: &OrganizerConfig,
     stats: &mut OrganizerStats,
 ) -> Result<()> {
+    let organization_lock = ORGANIZATION_LOCK.get_or_init(|| Mutex::new(()));
+    let _organization_guard = loop {
+        match organization_lock.try_lock() {
+            Ok(guard) => break guard,
+            Err(TryLockError::WouldBlock) => {
+                if cancel_requested() {
+                    anyhow::bail!("scan cancelled");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                anyhow::bail!("organization lock is poisoned");
+            }
+        }
+    };
+    organize_single_file_unlocked(file_path, config, stats)
+}
+
+fn organize_single_file_unlocked(
+    file_path: &Path,
+    config: &OrganizerConfig,
+    stats: &mut OrganizerStats,
+) -> Result<()> {
+    if cancel_requested() {
+        anyhow::bail!("scan cancelled");
+    }
     validate_template(&config.template)?;
     stats.processed += 1;
     stats.total += 1;
-
-    // Skip if already organized
-    if is_already_organized(file_path, config) {
-        stats.already_organized += 1;
-        return Ok(());
-    }
 
     // Prefer the existing YYYY-MM folder if the file is already nested inside one.
     // This keeps files in their current month bucket instead of re-routing them
@@ -1090,8 +1593,6 @@ pub fn organize_single_file(
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     let month_folder = determine_month_folder(file_path, config);
-    println!("found image: {}", file_path.display());
-
     let meta = match extract_image_meta(file_path) {
         Ok(meta) => meta,
         Err(err) => {
@@ -1108,6 +1609,17 @@ pub fn organize_single_file(
     } else {
         None
     };
+
+    // A capture without a date in its filename is placed directly under
+    // base/world rather than base/YYYY-MM/world. Recognize that layout too,
+    // otherwise a recursive watcher would see its own move as new work.
+    if let Some(target_sub) = &target_sub {
+        let expected_parent = month_folder.join(target_sub);
+        if file_path.parent() == Some(expected_parent.as_path()) {
+            stats.already_organized += 1;
+            return Ok(());
+        }
+    }
 
     if let Some(target_sub) = target_sub {
         println!("detected world: {} ({})", target_sub, file_path.display());
@@ -1166,7 +1678,6 @@ pub fn organize_single_file(
         }
     } else {
         stats.no_metadata += 1;
-        println!("no world metadata: {}", file_path.display());
         if config.dry_run {
             stats.preview.push(format!(
                 "Would skip:\n{}\n→ Missing image metadata",
@@ -1183,28 +1694,31 @@ fn process_folder(
     config: &OrganizerConfig,
     stats: &mut OrganizerStats,
 ) -> Result<()> {
-    let mut image_files: Vec<PathBuf> = WalkDir::new(folder)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| is_image_path(path))
-        .filter(|path| !is_ignored_path(path))
-        .collect();
+    let mut image_files = Vec::new();
+    for entry in WalkDir::new(folder) {
+        if cancel_requested() {
+            anyhow::bail!("scan cancelled");
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if entry.file_type().is_file() {
+            let path = entry.into_path();
+            if is_image_path(&path) && !is_ignored_path(&path) {
+                image_files.push(path);
+            }
+        }
+    }
     image_files.sort();
 
     for image_file in image_files {
+        if cancel_requested() {
+            anyhow::bail!("scan cancelled");
+        }
         // Delegate to organize_single_file which handles stats, metadata, template resolution, undo
-        if let Err(e) = organize_single_file(&image_file, config, stats) {
+        if let Err(e) = organize_single_file_unlocked(&image_file, config, stats) {
             eprintln!("error processing {}: {e}", image_file.display());
-            if let Err(log_error) = log_diagnostic(
-                &config.base_path,
-                "ERROR",
-                "file_failed",
-                &format!("path={} error={}", image_file.display(), e),
-            ) {
-                eprintln!("diagnostic log unavailable: {log_error}");
-            }
         }
     }
 
@@ -1244,6 +1758,132 @@ mod tests {
     #[test]
     fn no_date_in_filename_returns_none() {
         assert_eq!(extract_date_from_filename("Screenshot_foo.png"), None);
+    }
+
+    #[test]
+    fn classifies_metadata_before_path_fallback() {
+        assert_eq!(
+            classify_world(
+                Path::new("2026-09/Folder/capture.png"),
+                Some("Metadata World"),
+                true,
+                2
+            ),
+            Some("Metadata World".to_string())
+        );
+    }
+
+    #[test]
+    fn metadata_world_requires_two_photos() {
+        let path = Path::new("2026-09/Folder/capture.png");
+        assert_eq!(classify_world(path, Some("Metadata World"), true, 1), None);
+        assert_eq!(
+            classify_world(path, Some("Metadata World"), true, 2),
+            Some("Metadata World".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_metadata_placeholders_case_insensitively_and_with_whitespace() {
+        let path = Path::new("capture.png");
+        for name in [
+            " capture ",
+            "SCREENSHOT",
+            "VRChat_2026-09-20",
+            "Unknown.PNG",
+            "photo.jpg",
+            "image.webp",
+        ] {
+            assert_eq!(classify_world(path, Some(name), false, 2), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn accepts_unicode_metadata_world_names() {
+        assert_eq!(
+            classify_world(
+                Path::new("世界/capture.png"),
+                Some("  夜の世界 🌙  "),
+                false,
+                2
+            ),
+            Some("夜の世界 🌙".to_string())
+        );
+    }
+
+    #[test]
+    fn parsed_metadata_obeys_photo_count_qualification() {
+        let entries = vec![PngTextEntry {
+            keyword: "Description".to_string(),
+            value: r#"{"world":{"name":"真实世界 🌏"}}"#.to_string(),
+        }];
+        let (world, _, _) = parse_png_entries(&entries);
+        let path = Path::new("2026-09/Folder/capture.png");
+        assert_eq!(classify_world(path, world.as_deref(), true, 1), None);
+        assert_eq!(
+            classify_world(path, world.as_deref(), true, 2),
+            Some("真实世界 🌏".to_string())
+        );
+    }
+
+    #[test]
+    fn never_classifies_a_root_filename_as_a_world() {
+        assert_eq!(
+            classify_world(Path::new("VRChat_2026-09-20_capture.png"), None, true, 2),
+            None
+        );
+        assert_eq!(
+            classify_world(Path::new("capture.png"), None, false, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn classifies_only_known_world_folder_layouts() {
+        assert_eq!(
+            classify_world(Path::new("2026-09/Black Cat/capture.png"), None, true, 2),
+            Some("Black Cat".to_string())
+        );
+        assert_eq!(
+            classify_world(Path::new("Black Cat/capture.png"), None, false, 2),
+            Some("Black Cat".to_string())
+        );
+        assert_eq!(
+            classify_world(Path::new("New folder/capture.png"), None, true, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn requires_at_least_two_files_for_path_fallback() {
+        assert_eq!(
+            classify_world(Path::new("2026-09/Black Cat/capture.png"), None, true, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_reserved_and_filename_like_fallback_names() {
+        assert_eq!(
+            classify_world(Path::new("2026-09/Prints/capture.png"), None, true, 2),
+            None
+        );
+        assert_eq!(
+            classify_world(Path::new(".hidden/capture.png"), None, false, 2),
+            None
+        );
+        assert_eq!(
+            classify_world(Path::new("2026-09/VRChat_2026-01-01_a.png"), None, true, 2),
+            None
+        );
+        assert_eq!(
+            classify_world(Path::new("2026-09/photo.png"), None, true, 2),
+            None
+        );
+        assert_eq!(
+            classify_world(Path::new("2026-09/capture.png"), None, true, 2),
+            None
+        );
     }
 
     #[test]
@@ -1514,13 +2154,73 @@ mod tests {
         let image_path = dir.join("VRChat_2025-01-12_foo.png");
         image::RgbImage::new(1, 1).save(&image_path).unwrap();
 
-        let worlds = scan_library_details(&dir).unwrap();
+        let stats = scan_library(&dir).unwrap();
 
-        assert_eq!(worlds.len(), 1);
-        assert_eq!(worlds[0].name, "Unsorted");
-        assert_eq!(worlds[0].photos.len(), 1);
-        assert_eq!(worlds[0].photos[0].path, image_path.to_string_lossy());
+        assert!(stats.world_details.is_empty());
+        assert_eq!(stats.unorganized_photos.len(), 1);
+        assert_eq!(stats.total, 1);
+        assert_eq!(
+            stats.unorganized_photos[0].path,
+            image_path.to_string_lossy()
+        );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn organize_scan_includes_root_images_when_month_folders_exist() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-root-organize-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("2026-09")).unwrap();
+        let image_path = dir.join("VRChat_2026-09-20_root.png");
+        image::RgbImage::new(1, 1).save(&image_path).unwrap();
+
+        let config = OrganizerConfig {
+            base_path: dir.clone(),
+            dry_run: true,
+            scan_all_months: false,
+            single_folder: false,
+            template: "{world}".to_string(),
+        };
+        let mut stats = OrganizerStats::default();
+        organize_path(&config, &mut stats).unwrap();
+
+        assert_eq!(stats.processed, 1);
+        assert_eq!(stats.no_metadata, 1);
+        assert!(image_path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_library_scan_includes_root_images_with_month_folders() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-root-library-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("2026-09").join("World")).unwrap();
+        image::RgbImage::new(1, 1)
+            .save(dir.join("root-capture.png"))
+            .unwrap();
+        image::RgbImage::new(1, 1)
+            .save(dir.join("2026-09").join("World").join("dated-capture.png"))
+            .unwrap();
+        image::RgbImage::new(1, 1)
+            .save(
+                dir.join("2026-09")
+                    .join("World")
+                    .join("dated-capture-2.png"),
+            )
+            .unwrap();
+
+        let stats = scan_library(&dir).unwrap();
+
+        assert_eq!(stats.world_details.len(), 1);
+        assert_eq!(stats.world_details[0].name, "World");
+        assert_eq!(stats.world_details[0].photos.len(), 2);
+        assert_eq!(stats.unorganized_photos.len(), 1);
+        assert_eq!(stats.total, 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1535,12 +2235,57 @@ mod tests {
         let image_path = world_dir.join("capture with spaces [1].png");
         image::RgbImage::new(16, 9).save(&image_path).unwrap();
 
-        let worlds = scan_library_details_with_options(&dir, true).unwrap();
-        let photo = &worlds[0].photos[0];
+        let stats = scan_library_with_options(&dir, true).unwrap();
+        let photo = &stats.unorganized_photos[0];
 
-        assert_eq!(worlds[0].name, "A [strange] 世界");
+        assert!(stats.world_details.is_empty());
         assert_eq!(photo.path, image_path.to_string_lossy());
+        assert_eq!(photo.world_name, None);
+        generate_thumbnail(&image_path, &dir).unwrap();
         assert!(Path::new(&photo.thumbnail_path).is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_library_scan_uses_date_folder_world_fallback_and_ignores_arbitrary_folder_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "vrchat-organizer-test-library-layout-{}",
+            std::process::id()
+        ));
+        let dated_world = dir.join("2026-09").join("Known World");
+        let arbitrary = dir.join("New folder");
+        std::fs::create_dir_all(&dated_world).unwrap();
+        std::fs::create_dir_all(&arbitrary).unwrap();
+        let dated_image = dated_world.join("capture.png");
+        let dated_image_two = dated_world.join("capture-2.png");
+        let arbitrary_image = arbitrary.join("capture.png");
+        image::RgbImage::new(1, 1).save(&dated_image).unwrap();
+        image::RgbImage::new(1, 1).save(&dated_image_two).unwrap();
+        image::RgbImage::new(1, 1).save(&arbitrary_image).unwrap();
+
+        let stats = scan_library_with_options(&dir, true).unwrap();
+
+        assert!(stats
+            .world_details
+            .iter()
+            .any(|world| world.name == "Known World"));
+        assert!(!stats
+            .world_details
+            .iter()
+            .any(|world| world.name == "Unsorted"));
+        assert_eq!(stats.world_details[0].photos.len(), 2);
+        assert_eq!(stats.unorganized_photos.len(), 1);
+        assert_eq!(stats.total, 3);
+        assert_eq!(
+            stats
+                .world_details
+                .iter()
+                .map(|world| world.photos.len())
+                .sum::<usize>()
+                + stats.unorganized_photos.len(),
+            stats.total
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

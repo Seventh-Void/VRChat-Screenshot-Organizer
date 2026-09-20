@@ -37,7 +37,7 @@ cargo build --release -p desktop --target x86_64-pc-windows-gnu
 ```
 
 The helper copies the standalone executable to
-`release/v2.0.1/VRChatOrganizer-2.0.1-windows-x86_64.exe`, ready to upload as a
+`release/v2.0.2/VRChatOrganizer-2.0.2-windows-x86_64.exe`, ready to upload as a
 release artifact.
 
 > ⚠️ **Limitation:** The Tauri GUI app (`-p app`) cannot be cross-compiled from Linux because it requires native Windows WebView2. For the full GUI app on Windows, build natively on Windows (Option 1) or use GitHub Actions.
@@ -61,7 +61,7 @@ cargo tauri build --bundles nsis,msi
 ```
 
 The native Cargo output is `target/release/app.exe`. The release workflow
-renames it to `vrchat-organizer-2.0.1-portable.exe`. Installers are written to
+renames it to `vrchat-organizer-2.0.2-portable.exe`. Installers are written to
 `target/release/bundle/nsis/` and `target/release/bundle/msi/`.
 
 ### Option 2: CLI Binary Only (cross-compile from Linux)

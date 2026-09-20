@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2 - 2026-09-20
+
+- Added a Current session Library tab showing screenshots captured since VRChat
+  started.
+- Automatically selects Current session when VRChat opens or is already running
+  when Organizer starts.
+- Kept session filtering metadata-only with the existing lazy thumbnail loading.
+
 ## 2.0.0 - 2026-09-20
 
 The first public release of the Rust/Tauri rewrite.
