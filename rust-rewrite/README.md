@@ -128,7 +128,8 @@ rust-rewrite/
 
 ## Linux packaging
 
-The supported release artifact is an x86_64 AppImage. Install the Tauri Linux
+The supported release artifacts are the x86_64 AppImage and Windows CLI
+executable. Install the Tauri Linux
 prerequisites and `appimagetool`, then run:
 
 ```bash
@@ -139,6 +140,7 @@ cd rust-rewrite
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
 `release/v2.1.0/` (with the version read from Cargo metadata).
+It rebuilds both artifacts and fails if either one cannot be produced.
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
 The Windows cross-compilation helper uses the same versioned release directory:

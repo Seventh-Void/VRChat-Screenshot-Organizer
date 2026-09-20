@@ -75,6 +75,10 @@ cargo build --release -p desktop --target x86_64-pc-windows-gnu
 
 The output will be at `target/x86_64-pc-windows-gnu/release/desktop.exe`.
 
+For the normal full release build, run `./build-appimage.sh` from
+`rust-rewrite`. It rebuilds the AppImage and Windows CLI executable together,
+then writes their checksums. The command fails if either artifact is missing.
+
 ### Option 3: Automated via GitHub Actions (easiest!)
 
 Push a tag to GitHub and the [release workflow](../.github/workflows/release.yml) will automatically build:
