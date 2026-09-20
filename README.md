@@ -11,7 +11,7 @@ watch mode, undo support and AppImage packaging documented there.
 [![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?logo=tauri)](https://v2.tauri.app/)
 [![Release](https://img.shields.io/github/v/release/Seventh-Void/VRChat-Screenshot-Organizer)](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases)
 
-> **Version 2.0** — the first public release of the Rust/Tauri desktop application.
+> **Version 2.0.0** — the first public release of the Rust/Tauri desktop application.
 
 ![VRChat Organizer library](./docs/screenshots/library.png)
 
@@ -71,8 +71,13 @@ This project has been developed with assistance from an AI coding tool. While th
 
 ### Download
 
-Grab the latest `VRChatOrganizer-2.0.0-x86_64.AppImage`, portable Windows executable,
-or Windows installer from the [releases page](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases).
+Download the latest version from the [releases page](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases).
+The v2.0.0 release includes:
+
+- `VRChatOrganizer-2.0.0-x86_64.AppImage` — Linux x86_64 Tauri GUI bundle
+- `VRChatOrganizer-2.0.0-windows-x86_64.exe` — Windows x86_64 CLI build
+- Native Windows Tauri portable and installer builds produced by GitHub Actions
+- `SHA256SUMS` and the release README
 
 ### Linux installation
 
@@ -95,10 +100,11 @@ contains the application icon, desktop entry, and AppStream metadata.
 
 ### Windows installation
 
-Use the NSIS installer for a normal Start Menu installation, or download the
-portable `vrchat-organizer.exe` when you do not want to install anything. Windows
-10/11 includes WebView2 on supported systems; if the portable build reports a
-missing WebView2 runtime, install it from Microsoft's
+Use the native Windows Tauri NSIS installer for a normal Start Menu installation,
+or use the portable Tauri executable when you do not want to install anything.
+The separately provided `VRChatOrganizer-2.0.0-windows-x86_64.exe` is the
+headless CLI build and does not provide the GUI. Windows 10/11 includes WebView2
+on supported systems; if a GUI build reports a missing WebView2 runtime, install it from Microsoft's
 [WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
 
 ### Before You Start
@@ -163,17 +169,19 @@ cargo build -p app --release
 # Build the full workspace (all crates)
 cargo build --release
 
-# Build the AppImage (requires appimagetool)
+# Build the versioned Linux AppImage release asset (requires appimagetool)
 ./build-appimage.sh
 
-# Build the Windows CLI from Linux (requires mingw-w64)
+# Build the versioned Windows CLI release asset from Linux (requires mingw-w64)
 # See BUILDING_WINDOWS.md for detailed instructions
 ./build-windows.sh
 ```
 
-The full Windows GUI, portable executable, NSIS installer, and MSI are built on
-the Windows GitHub Actions runner. This is required because Tauri uses the
-native Windows WebView2 toolchain.
+The scripts write release assets to `../release/v2.0.0/`:
+`VRChatOrganizer-2.0.0-x86_64.AppImage`, the Windows CLI executable, and
+`SHA256SUMS`. The native Windows GUI, portable executable, NSIS installer, and
+MSI are built on the Windows GitHub Actions runner because Tauri uses the native
+Windows WebView2 toolchain.
 
 ## 📖 Usage Guide
 
@@ -321,20 +329,20 @@ VRChat-Screenshot-Organizer/
 │   │       ├── Cargo.toml
 │   │       └── src/
 │   │           └── main.rs          # CLI: env-var-based configuration
-│   ├── src-tauri/                   # Tauri v2 desktop app
+│   ├── frontend/                    # Tauri HTML/CSS/JavaScript frontend
+│   ├── packaging/                   # Linux desktop entry and AppStream metadata
+│   ├── src-tauri/                   # Tauri v2 desktop app shell
 │   │   ├── Cargo.toml
 │   │   ├── tauri.conf.json          # Tauri configuration
-│   │   ├── index.html               # Frontend (HTML + CSS + JS)
+│   │   ├── icons/                   # Application icons
 │   │   ├── src/
 │   │   │   ├── main.rs              # Tauri entrypoint
 │   │   │   └── lib.rs               # Tauri commands: organize, undo, watch, auto-detect
 │   │   └── capabilities/
 │   │       └── default.json
 │   └── README.md                    # Rust-specific details
-├── icons/                           # Application icons
-│   └── 256x256/
-│       └── apps/
-│           └── vrchat-organizer.svg
+├── release/v2.0.0/                  # Local release staging area (ignored binaries)
+├── docs/screenshots/                # Documentation screenshots
 ├── README.md                        # This file
 ├── CONTRIBUTING.md
 ├── LICENSE                          # MIT License
