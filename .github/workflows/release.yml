@@ -1,0 +1,117 @@
+name: Build Release Artifacts
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install appimagetool
+        run: |
+          sudo wget -O /usr/local/bin/appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+
+      - name: Build Tauri App & CLI + Package AppImage
+        run: ./build-appimage.sh
+        working-directory: ./rust-rewrite
+
+      - name: Upload AppImage to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./rust-rewrite/target/VRChatOrganizer-*.AppImage
+          tag: ${{ github.ref }}
+          file_glob: true
+          overwrite: true
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with Windows target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install mingw-w64 cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Build CLI binary for Windows
+        run: cargo build --release -p desktop --target x86_64-pc-windows-gnu
+        working-directory: ./rust-rewrite
+
+      - name: Upload Windows EXE to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./rust-rewrite/target/x86_64-pc-windows-gnu/release/desktop.exe
+          tag: ${{ github.ref }}
+          overwrite: true
+
+  build-windows-tauri:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri dependencies (WebView2 is pre-installed)
+        run: |
+          cargo install tauri-cli --version "^2"
+
+      - name: Build portable executable and installers
+        shell: pwsh
+        run: |
+          cargo tauri build --bundles nsis,msi
+          Copy-Item target/release/app.exe target/release/vrchat-organizer-2.0.0-portable.exe
+        working-directory: ./rust-rewrite
+
+      - name: Upload portable Windows executable
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./rust-rewrite/target/release/vrchat-organizer-*-portable.exe
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload Windows installers to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./rust-rewrite/target/release/bundle/**/*.exe
+          tag: ${{ github.ref }}
+          file_glob: true
+          overwrite: true
+
+      - name: Upload MSI installer to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./rust-rewrite/target/release/bundle/**/*.msi
+          tag: ${{ github.ref }}
+          file_glob: true
+          overwrite: true

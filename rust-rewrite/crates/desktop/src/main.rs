@@ -7,8 +7,10 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let base_path = args
         .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~/Pictures/VRChat/VRChat"));
+        .map(|path| PathBuf::from(shellexpand::tilde(&path).into_owned()))
+        .unwrap_or_else(|| {
+            PathBuf::from(shellexpand::tilde("~/Pictures/VRChat/VRChat").into_owned())
+        });
 
     let dry_run = env::var("VRCHAT_DRY_RUN").is_ok();
     let scan_all_months = env::var("VRCHAT_SCAN_ALL_MONTHS").is_ok();

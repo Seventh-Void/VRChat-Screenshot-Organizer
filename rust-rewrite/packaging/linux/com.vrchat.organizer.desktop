@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=VRChat Organizer
+Comment=Organize VRChat screenshots by world
+Exec=vrchat-organizer %U
+Icon=vrchat-organizer
+Terminal=false
+Type=Application
+Categories=Graphics;
+Keywords=VRChat;Screenshots;Photos;Organizer;
+StartupNotify=true

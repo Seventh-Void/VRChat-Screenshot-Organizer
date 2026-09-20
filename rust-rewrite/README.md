@@ -76,3 +76,58 @@ All Rust crates used:
 - `chrono` — Date handling
 - `regex` / `walkdir` — File scanning
 - `tauri` — Desktop application framework
+
+## Project structure
+
+```text
+rust-rewrite/
+├── crates/
+│   ├── organizer-core/        Metadata, validation, safe file operations and undo
+│   └── desktop/               Scriptable CLI entry point
+├── frontend/                  Tauri frontend and dashboard UI
+├── src-tauri/                 Tauri commands, watcher lifecycle and app shell
+├── packaging/linux/           Desktop entry and AppStream metadata
+├── build-appimage.sh          Reproducible Linux AppImage build
+└── build-windows.sh           Windows packaging helper
+```
+
+## Linux packaging
+
+The supported release artifact is an x86_64 AppImage. Install the Tauri Linux
+prerequisites and `appimagetool`, then run:
+
+```bash
+cd rust-rewrite
+./build-appimage.sh
+```
+
+The script fails fast when a required tool is missing, embeds the desktop entry,
+AppStream metadata and icon, and writes the result to `rust-rewrite/target/`.
+The AppImage can be launched on both X11 and Wayland through WebKitGTK.
+
+For a local development cycle:
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --release
+```
+
+## Troubleshooting
+
+- **No worlds are detected:** keep VRCX running and enable VRCX's Screenshot
+  Metadata setting before taking new screenshots.
+- **A folder is unavailable:** choose an existing, readable folder. Permission
+  errors are reported in the activity panel and do not terminate the app.
+- **A template is rejected:** use only `{world}`, `{width}`, `{height}`,
+  `{year}`, `{month}`, and `{day}`. Path separators are sanitised.
+- **Undo is unavailable:** undo entries are written only for completed moves;
+  if the original path already contains a file, the restore is skipped rather
+  than overwriting data.
+- **Simulation mode:** use **Settings → Preview organization** to run a
+  no-write scan. The returned preview includes planned moves and files skipped
+  because metadata is missing.
+- **Activity diagnostics:** completed scans and simulations append bounded,
+  atomic records to `.vrchat-organizer-activity.json` in the selected library.
+  Records include status, duration, file counts, and a compact summary.

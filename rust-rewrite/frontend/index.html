@@ -1,1150 +1,548 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VRChat Organizer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/png" href="app-icon.png">
+  <title>VRChat Organizer · Library</title>
   <style>
-    /* ═══════════════════════════════════════════════════
-       RESET & BASE
-       ═══════════════════════════════════════════════════ */
-    *, *::before, *::after { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; overflow: hidden; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-      font-size: 13px;
-      line-height: 1.5;
-      background: #0d0d0f;
-      color: #e5e5e7;
-      -webkit-font-smoothing: antialiased;
+    :root {
+      color-scheme: dark;
+      --ink: #f4f0e9;
+      --muted: #5e536f;
+      --faint: #4a425d;
+      --line: rgba(171,95,239,.2);
+      --surface: #181732;
+      --surface-2: #212027;
+      --canvas: #0e0d14;
+      --accent: #892ce0;
+      --accent-bright: #ab5fef;
+      --accent-deep: #4a0180;
+      --accent-soft: rgba(125,44,203,.2);
+      --green: #ab5fef;
+      --ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #3a3a42; }
-
-    /* ═══════════════════════════════════════════════════
-       LAYOUT
-       ═══════════════════════════════════════════════════ */
-    .app {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      overflow: hidden;
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: var(--canvas); color: var(--ink); font: 13px/1.45 var(--ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .app { display: grid; grid-template-columns: 238px 1fr; height: 100vh; }
+    .sidebar { background: #181732; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 26px 16px 18px; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px 33px; }
+    .brand-mark { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 10px; overflow: hidden; background: #17112f; box-shadow: 0 8px 24px rgba(137,44,224,.28); }
+    .brand-mark img { width: 31px; height: 31px; display: block; }
+    .brand-name { font-weight: 650; letter-spacing: -.3px; }
+    .brand-sub { color: var(--faint); font-size: 10px; margin-top: 1px; letter-spacing: .5px; text-transform: uppercase; }
+    .nav-label { padding: 0 11px 9px; color: var(--faint); font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; }
+    .nav { display: grid; gap: 3px; }
+    .nav button { border: 0; background: none; width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 11px; border-radius: 9px; color: var(--muted); text-align: left; cursor: pointer; transition: .18s ease; }
+    .nav button:hover { background: rgba(171,95,239,.08); color: var(--ink); }
+    .nav button.active { background: var(--accent-soft); color: var(--ink); }
+    .nav-count { margin-left: auto; color: var(--faint); font-size: 11px; }
+    .nav-icon { width: 18px; color: var(--faint); font-size: 15px; text-align: center; }
+    .nav button.active .nav-icon { color: var(--accent); }
+    .side-spacer { flex: 1; }
+    .watch-card { border-top: 1px solid var(--line); padding: 18px 10px 0; }
+    .watch-top { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+    .pulse.live { background: var(--green); box-shadow: 0 0 0 4px rgba(171,95,239,.16); }
+    .watch-copy { color: var(--faint); font-size: 11px; margin: 7px 0 13px; }
+    .text-btn { border: 0; background: none; color: var(--accent); padding: 0; cursor: pointer; font-size: 11px; }
+    .main { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .topbar { display: flex; align-items: center; gap: 22px; padding: 21px 34px 18px; border-bottom: 1px solid var(--line); }
+    .crumb { font-size: 12px; color: var(--muted); }
+    .crumb strong { color: var(--ink); font-weight: 600; }
+    .top-spacer { flex: 1; }
+    .search { position: relative; width: min(300px, 32vw); }
+    .search input { width: 100%; border: 1px solid var(--line); background: #212027; border-radius: 8px; padding: 9px 12px 9px 35px; color: var(--ink); outline: none; }
+    .search input:focus { border-color: rgba(171,95,239,.72); }
+    .search svg { position: absolute; left: 12px; top: 10px; color: var(--faint); }
+    .icon-btn { border: 1px solid var(--line); background: transparent; border-radius: 8px; width: 34px; height: 34px; cursor: pointer; color: var(--muted); }
+    .icon-btn:hover { color: var(--ink); background: rgba(171,95,239,.08); }
+    .content { flex: 1; overflow: auto; padding: 33px 34px 42px; }
+    .content::-webkit-scrollbar { width: 9px; }
+    .content::-webkit-scrollbar-thumb { background: #4a425d; border-radius: 20px; }
+    .view { display: none; max-width: 1420px; margin: auto; }
+    .view.active { display: block; animation: in .35s ease both; }
+    @keyframes in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+    .eyebrow { color: var(--accent); font-size: 10px; letter-spacing: 1.8px; text-transform: uppercase; font-weight: 650; }
+    h1 { font: 650 clamp(31px, 4vw, 48px)/1.08 var(--ui); letter-spacing: -1.4px; margin: 8px 0 10px; }
+    .intro { color: var(--muted); max-width: 530px; margin: 0; }
+    .library-head { display: flex; align-items: end; gap: 24px; margin-bottom: 26px; }
+    .library-head .top-spacer { min-width: 20px; }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    .btn { border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 9px 13px; cursor: pointer; color: var(--muted); }
+    .btn:hover { color: var(--ink); background: rgba(171,95,239,.08); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #0e0d14; font-weight: 700; }
+    .btn.primary:hover { filter: brightness(1.08); }
+    .stats-line { display: flex; align-items: center; gap: 22px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 0; margin-bottom: 26px; color: var(--muted); }
+    .stat strong { color: var(--ink); font-size: 16px; margin-right: 5px; font-variant-numeric: tabular-nums; }
+    .stat span { font-size: 11px; }
+    .session-status { display:flex; align-items:center; gap:18px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding:0 0 18px; margin:-10px 0 23px; color:var(--muted); }
+    .session-status-item { display:flex; align-items:center; gap:7px; font-size:11px; }
+    .session-status-item strong { color:var(--ink); font-weight:600; }
+    .session-dot { width:7px; height:7px; border-radius:50%; background:var(--faint); }
+    .session-dot.live { background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+    .session-status-item time { color:var(--ink); font-variant-numeric:tabular-nums; }
+    .library-tools { display: flex; align-items: center; margin-bottom: 15px; }
+    .filter { display: flex; gap: 5px; }
+    .filter button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 4px 9px; border-radius: 5px; font-size: 12px; }
+    .filter button.active, .filter button:hover { color: var(--ink); background: rgba(171,95,239,.12); }
+    .sort { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 12px; outline: none; }
+    .world-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 18px; }
+    .world { min-width: 0; cursor: pointer; }
+    .cover { aspect-ratio: 1.23; overflow: hidden; border-radius: 9px; position: relative; background: #2f2c47; border: 1px solid rgba(171,95,239,.2); }
+    .cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s cubic-bezier(.2,.7,.2,1), filter .4s; }
+    .world:hover .cover img { transform: scale(1.045); filter: saturate(1.12); }
+    .cover::after { content: ""; position: absolute; inset: 45% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.62)); pointer-events: none; }
+    .cover-meta { position: absolute; z-index: 1; left: 12px; bottom: 10px; right: 10px; display: flex; justify-content: space-between; color: #fff; font-size: 11px; }
+    .favorite { position: absolute; z-index: 2; top: 9px; right: 9px; border: 0; background: rgba(14,13,20,.72); backdrop-filter: blur(8px); width: 27px; height: 27px; border-radius: 50%; cursor: pointer; color: #fff; }
+    .favorite.on { color: var(--accent); }
+    .world-info { padding: 10px 2px 0; display: flex; justify-content: space-between; gap: 9px; }
+    .world-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .world-place { color: var(--faint); font-size: 11px; margin-top: 3px; }
+    .world-count { color: var(--muted); font-size: 11px; white-space: nowrap; padding-top: 2px; }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 17px; }
+    .section-title h2 { font: 650 27px/1.15 var(--ui); margin: 0; letter-spacing: -.5px; }
+    .section-title p { color: var(--faint); margin: 0; font-size: 11px; }
+    .timeline { max-width: 900px; }
+    .day { display: grid; grid-template-columns: 104px 1fr; gap: 28px; border-top: 1px solid var(--line); padding: 20px 0 25px; }
+    .day-date { color: var(--muted); font-size: 12px; }
+    .day-date strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 3px; }
+    .photo-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    .photo { aspect-ratio: 1.22; border-radius: 6px; overflow: hidden; background: #2f2c47; }
+    .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .collection-layout { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
+    .collection-feature { min-height: 270px; border:1px solid var(--line); border-radius: 10px; display:grid; place-items:center; padding:24px; text-align:center; }
+    .collection-feature-copy h2 { font: 650 31px/1.15 var(--ui); margin: 0; }
+    .collection-feature-copy p { color: var(--muted); margin: 5px 0 0; }
+    .collection-list { border-top: 1px solid var(--line); }
+    .collection-row { display:flex; align-items:center; gap:12px; padding: 13px 0; border-bottom:1px solid var(--line); }
+    .collection-thumb { width: 50px; height: 42px; border-radius: 5px; object-fit: cover; }
+    .collection-row strong { font-size: 12px; }
+    .collection-row small { display:block; color:var(--faint); margin-top:2px; }
+    .collection-row span { margin-left:auto; color:var(--muted); font-size:11px; }
+    .activity-layout { display:grid; grid-template-columns: 1.3fr .7fr; gap:55px; max-width: 1050px; }
+    .activity-list { border-top:1px solid var(--line); }
+    .activity-item { display:grid; grid-template-columns: 28px 1fr auto; gap:12px; align-items:center; border-bottom:1px solid var(--line); padding:15px 0; }
+    .activity-dot { width:24px; height:24px; border-radius:50%; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); font-size:11px; }
+    .activity-item strong { font-size:12px; font-weight:600; }
+    .activity-item small { display:block; color:var(--faint); margin-top:2px; }
+    .activity-item time { color:var(--faint); font-size:11px; }
+    .storage { border-left:1px solid var(--line); padding-left: 24px; }
+    .storage h3 { font: 650 22px/1.2 var(--ui); margin:0 0 5px; }
+    .storage p { color:var(--muted); font-size:12px; margin:0 0 20px; }
+    .bar { height:8px; background:#4a425d; border-radius:10px; overflow:hidden; margin-bottom:9px; }
+    .bar i { display:block; width:64%; height:100%; background:var(--accent); border-radius:inherit; }
+    .storage-foot { display:flex; justify-content:space-between; color:var(--faint); font-size:11px; }
+    .automation-grid { display:grid; grid-template-columns: 1.2fr .8fr; gap:50px; max-width: 990px; }
+    .automation-hero { border-bottom:1px solid var(--line); padding-bottom:24px; }
+    .automation-hero h2 { font:650 34px/1.15 var(--ui); margin: 9px 0; }
+    .automation-hero p { color:var(--muted); max-width:430px; }
+    .toggle-row { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding:17px 0; }
+    .toggle-row strong { font-size:12px; }
+    .toggle-row small { display:block; color:var(--faint); margin-top:3px; }
+    .toggle { width:37px; height:21px; border:0; border-radius:20px; background:#4a425d; cursor:pointer; padding:2px; }
+    .toggle i { display:block; width:17px; height:17px; border-radius:50%; background:#5e536f; transition:.2s; }
+    .toggle.on { background:var(--accent); }
+    .toggle.on i { transform:translateX(16px); background:#0e0d14; }
+    .setting-list { border-top:1px solid var(--line); }
+    .setting { display:flex; justify-content:space-between; gap:25px; padding:15px 0; border-bottom:1px solid var(--line); }
+    .setting span { color:var(--muted); font-size:12px; }
+    .setting code { color:var(--accent); font:11px ui-monospace, monospace; text-align:right; }
+    .folder-setting { display:flex; flex-direction:column; align-items:flex-end; gap:9px; min-width:0; }
+    .folder-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .onboarding-folder-actions { margin-top:10px; }
+    .empty { padding:55px 0; color:var(--muted); border-top:1px solid var(--line); }
+    .toast { position:fixed; bottom:20px; right:24px; padding:12px 15px; background:#2f2c47; border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:0 12px 30px rgba(14,13,20,.5); transform:translateY(15px); opacity:0; pointer-events:none; transition:.25s; }
+    .toast.show { transform:none; opacity:1; }
+    .onboarding { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:24px; background:rgba(14,13,20,.78); backdrop-filter:blur(12px); }
+    .onboarding[hidden] { display:none; }
+    .onboarding-panel { width:min(100%, 590px); padding:34px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:0 24px 70px rgba(0,0,0,.42); }
+    .onboarding-top { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    .onboarding-step { color:var(--faint); font-size:11px; }
+    .onboarding-progress { height:3px; margin:22px 0 27px; background:rgba(171,95,239,.12); border-radius:10px; overflow:hidden; }
+    .onboarding-progress i { display:block; width:33.33%; height:100%; background:var(--accent); transition:width .25s ease; }
+    .onboarding-step-panel { display:none; }
+    .onboarding-step-panel.active { display:block; animation:in .25s ease both; }
+    .onboarding-panel h2 { font:650 34px/1.1 var(--ui); letter-spacing:-.7px; margin:10px 0 11px; }
+    .onboarding-panel p { color:var(--muted); margin:0 0 24px; max-width:480px; }
+    .onboarding-form { display:flex; gap:8px; }
+    .onboarding-form input { min-width:0; flex:1; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink); outline:none; padding:10px 12px; }
+    .onboarding-form input:focus { border-color:rgba(171,95,239,.72); }
+    .onboarding-form .btn { white-space:nowrap; }
+    .onboarding-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:28px; }
+    .onboarding-actions .right { display:flex; gap:8px; margin-left:auto; }
+    .onboarding-link { border:0; background:none; color:var(--muted); padding:9px 0; cursor:pointer; }
+    .onboarding-link:hover { color:var(--ink); }
+    .onboarding-list { display:grid; gap:15px; margin:25px 0 0; }
+    .onboarding-list-item { display:grid; grid-template-columns:30px 1fr; gap:12px; align-items:start; }
+    .onboarding-list-item b { display:block; margin-bottom:2px; }
+    .onboarding-list-item span { color:var(--muted); font-size:12px; }
+    .onboarding-number { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:var(--accent-soft); color:var(--accent-bright); font-weight:700; }
+    .onboarding-path { display:block; padding:12px 14px; margin:18px 0 0; overflow-wrap:anywhere; border:1px solid var(--line); border-radius:8px; color:var(--muted); background:var(--surface-2); font:11px ui-monospace, monospace; }
+    .onboarding-choice { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:22px; }
+    .onboarding-choice .btn { text-align:left; min-height:76px; }
+    .onboarding-choice strong { display:block; color:var(--ink); margin-bottom:4px; }
+    .onboarding-choice small { display:block; color:var(--muted); line-height:1.35; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    .name-setting { display:flex; align-items:center; gap:9px; }
+    .name-setting .btn { padding:5px 9px; font-size:11px; }
+    .theme-setting { max-width:760px; margin-top:28px; padding-top:24px; border-top:1px solid var(--line); }
+    .theme-setting h2 { font:650 27px/1.15 var(--ui); margin:0 0 6px; letter-spacing:-.5px; }
+    .theme-setting p { color:var(--muted); margin:0 0 17px; }
+    .theme-options { display:flex; align-items:center; flex-wrap:wrap; gap:9px; }
+    .theme-swatch { display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--muted); padding:7px 10px 7px 7px; cursor:pointer; }
+    .theme-swatch:hover, .theme-swatch.active { color:var(--ink); background:rgba(171,95,239,.08); border-color:rgba(171,95,239,.62); }
+    .theme-swatch i { display:block; width:19px; height:19px; border-radius:50%; background:var(--swatch); box-shadow:inset 0 0 0 1px rgba(255,255,255,.22); }
+    .custom-theme { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+    .custom-theme input { width:34px; height:30px; padding:2px; border:1px solid var(--line); border-radius:7px; background:transparent; cursor:pointer; }
+    @media (max-width: 600px) { .onboarding-panel { padding:27px 22px; } .onboarding-form, .onboarding-choice { grid-template-columns:1fr; flex-direction:column; } .onboarding-actions { align-items:stretch; flex-direction:column-reverse; } .onboarding-actions .right { margin-left:0; } }
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 68px 1fr; }
+      .sidebar { padding:20px 10px; align-items:center; }
+      .brand { padding:0 0 27px; } .brand-copy, .nav-label, .nav button span:not(.nav-icon), .nav-count, .watch-card { display:none; }
+      .nav button { justify-content:center; padding:12px; } .nav-icon { font-size:18px; }
+      .topbar, .content { padding-left:22px; padding-right:22px; }
+      .library-head { align-items:flex-start; flex-direction:column; gap:18px; } .actions { width:100%; }
+      .activity-layout, .automation-grid, .collection-layout { grid-template-columns:1fr; gap:30px; }
+      .storage { border-left:0; border-top:1px solid var(--line); padding:25px 0 0; }
     }
-
-    /* ── HEADER ── */
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 20px;
-      background: #121214;
-      border-bottom: 1px solid #1e1e22;
-      flex-shrink: 0;
-      user-select: none;
+    @media (max-width: 600px) {
+      .topbar { gap:10px; } .crumb { display:none; } .search { width:auto; flex:1; }
+      .content { padding-top:24px; } .world-grid { grid-template-columns:repeat(2, 1fr); gap:12px; }
+      .photo-row { grid-template-columns:repeat(2, 1fr); } .day { grid-template-columns:1fr; gap:11px; }
+      .stats-line { gap:12px; overflow:auto; } .stat { white-space:nowrap; }
     }
-    .header-brand {
-      font-size: 14px;
-      font-weight: 600;
-      color: #e5e5e7;
-      letter-spacing: -0.2px;
-    }
-    .header-brand span { color: #8b5cf6; }
-    .header-spacer { flex: 1; }
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .header-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 5px 10px;
-      border: 1px solid #1e1e22;
-      border-radius: 6px;
-      background: transparent;
-      color: #5c5c64;
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .header-btn:hover {
-      border-color: #2a2a30;
-      background: #18181b;
-      color: #a1a1aa;
-    }
-    .header-btn.active {
-      border-color: #8b5cf6;
-      color: #c4b5fd;
-      background: rgba(139,92,246,0.08);
-    }
-
-    /* ── MAIN ── */
-    .main {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-    .col-left {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      overflow-y: auto;
-      min-width: 0;
-    }
-    .col-right {
-      width: 320px;
-      min-width: 280px;
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      overflow-y: auto;
-      border-left: 1px solid #1e1e22;
-    }
-    [data-mode="simple"] .col-right { display: none; }
-
-    /* ── SECTION (replaces "card") ── */
-    .section {
-      padding: 16px 20px;
-      border-bottom: 1px solid #161618;
-    }
-    .section:last-of-type { border-bottom: none; }
-    .section-label {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: #5c5c64;
-      margin-bottom: 10px;
-      user-select: none;
-    }
-    .section-content { min-width: 0; }
-
-    /* ── STATUS BAR ── */
-    .status-bar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      background: #121214;
-      border-radius: 8px;
-      border: 1px solid #1e1e22;
-    }
-    .status-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #3a3a42;
-      flex-shrink: 0;
-      transition: all 0.3s;
-    }
-    .status-dot.ready { background: #3a3a42; }
-    .status-dot.active { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.35); }
-    .status-dot.error { background: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.3); }
-    .status-dot.busy {
-      background: #eab308;
-      box-shadow: 0 0 8px rgba(234,179,8,0.3);
-      animation: pulse 0.8s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .status-text {
-      font-size: 12px;
-      font-weight: 500;
-      color: #e5e5e7;
-    }
-    .status-extra {
-      margin-left: auto;
-      font-size: 11px;
-      color: #5c5c64;
-    }
-
-    /* ── INPUTS ── */
-    input, select {
-      width: 100%;
-      padding: 8px 12px;
-      border-radius: 6px;
-      border: 1px solid #1e1e22;
-      background: #121214;
-      color: #e5e5e7;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    input:focus { border-color: #8b5cf6; }
-    input::placeholder { color: #5c5c64; }
-
-    .input-row {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-    }
-    .input-row input { flex: 1; }
-
-    /* ── BUTTONS ── */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      padding: 7px 14px;
-      border: none;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
-      line-height: 1;
-      user-select: none;
-    }
-    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .btn:active:not(:disabled) { transform: scale(0.97); }
-
-    /* Primary accent — only for main actions */
-    .btn-primary {
-      background: #8b5cf6;
-      color: #fff;
-    }
-    .btn-primary:hover:not(:disabled) { background: #7c3aed; }
-
-    /* Secondary — for support actions */
-    .btn-secondary {
-      background: #18181b;
-      border: 1px solid #1e1e22;
-      color: #a1a1aa;
-    }
-    .btn-secondary:hover:not(:disabled) {
-      background: #202024;
-      color: #e5e5e7;
-    }
-
-    /* Tertiary — ghost buttons (Undo/Clear): border-only, no fill */
-    .btn-tertiary {
-      background: transparent;
-      border: 1px solid #1e1e22;
-      color: #5c5c64;
-    }
-    .btn-tertiary:hover:not(:disabled) {
-      background: #18181b;
-      border-color: #2a2a30;
-      color: #a1a1aa;
-    }
-
-    .btn-sm { padding: 5px 10px; font-size: 11px; }
-
-    .btn-group {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    /* ── CUSTOM CHECKBOXES ── */
-    .checkbox-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: #8a8a90;
-      cursor: pointer;
-      padding: 3px 10px 3px 8px;
-      border-radius: 6px;
-      background: #121214;
-      border: 1px solid #1e1e22;
-      transition: border-color 0.15s, background 0.15s;
-      user-select: none;
-    }
-    .checkbox-label:hover {
-      border-color: #2a2a30;
-      background: #18181b;
-    }
-    .checkbox-label input[type="checkbox"] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
-      margin: 0;
-      border: 1.5px solid #2a2a30;
-      border-radius: 4px;
-      background: #0d0d0f;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: all 0.15s;
-      position: relative;
-    }
-    .checkbox-label input[type="checkbox"]:hover {
-      border-color: #3a3a42;
-    }
-    .checkbox-label input[type="checkbox"]:checked {
-      background: #8b5cf6;
-      border-color: #8b5cf6;
-    }
-    .checkbox-label input[type="checkbox"]:checked::after {
-      content: '';
-      position: absolute;
-      top: 1px;
-      left: 4px;
-      width: 4px;
-      height: 8px;
-      border: solid #fff;
-      border-width: 0 2px 2px 0;
-      transform: rotate(45deg);
-    }
-
-    /* Primary vs secondary action groups */
-    .action-group-primary {
-      display: flex;
-      gap: 6px;
-    }
-    .action-group-primary .btn {
-      padding: 9px 18px;
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .action-group-secondary {
-      display: flex;
-      gap: 4px;
-      margin-left: 4px;
-    }
-    .action-group-secondary .btn {
-      font-size: 11px;
-      padding: 5px 10px;
-    }
-
-    /* ── ACTIONS ROW ── */
-    .actions-row {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      flex-wrap: wrap;
-    }
-
-    /* ── WATCH RADAR ── */
-    .watch-radar {
-      display: none;
-      position: relative;
-      width: 20px;
-      height: 20px;
-      flex-shrink: 0;
-    }
-    .watch-radar.active { display: inline-block; }
-    .watch-radar .ring {
-      position: absolute;
-      inset: 0;
-      border-radius: 50%;
-      border: 1.5px solid #22c55e;
-      animation: radar-ping 2s ease-out infinite;
-    }
-    .watch-radar .ring:nth-child(2) { animation-delay: 0.5s; }
-    .watch-radar .ring:nth-child(3) { animation-delay: 1s; }
-    .watch-radar .ring:nth-child(4) { animation-delay: 1.5s; }
-    .watch-radar .dot {
-      position: absolute;
-      top: 50%; left: 50%;
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: #22c55e;
-      transform: translate(-50%, -50%);
-    }
-    @keyframes radar-ping {
-      0% { transform: scale(0.3); opacity: 0.8; }
-      100% { transform: scale(2.5); opacity: 0; }
-    }
-
-    /* ── STAT PILLS ── */
-    .pill-row {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-    }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 500;
-      background: #121214;
-      border: 1px solid #1e1e22;
-      color: #8a8a90;
-    }
-    .pill.organized { color: #22c55e; border-color: rgba(34,197,94,0.2); }
-    .pill.error { color: #ef4444; border-color: rgba(239,68,68,0.2); }
-
-    /* ── WORLDS LIST ── */
-    .worlds-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 4px;
-    }
-    .world-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      border-radius: 6px;
-      background: #121214;
-      border: 1px solid #1e1e22;
-      font-size: 12px;
-      transition: border-color 0.15s;
-      animation: fadeIn 0.2s ease backwards;
-    }
-    .world-item:nth-child(1) { animation-delay: 0.02s; }
-    .world-item:nth-child(2) { animation-delay: 0.04s; }
-    .world-item:nth-child(3) { animation-delay: 0.06s; }
-    .world-item:nth-child(4) { animation-delay: 0.08s; }
-    .world-item:nth-child(5) { animation-delay: 0.10s; }
-    .world-item:hover {
-      border-color: #2a2a30;
-    }
-    .world-item .name {
-      font-weight: 500;
-      color: #e5e5e7;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      flex: 1;
-    }
-    .world-item .count {
-      font-weight: 600;
-      color: #8a8a90;
-      font-size: 12px;
-      flex-shrink: 0;
-      margin-left: 8px;
-    }
-    .world-item .photocount { color: #8b5cf6; margin-right: 2px; }
-    .worlds-summary {
-      font-size: 11px;
-      color: #5c5c64;
-      margin-top: 8px;
-    }
-    .empty-state {
-      padding: 12px;
-      text-align: center;
-      color: #5c5c64;
-      font-size: 12px;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* ── ACTIVITY LOG ── */
-    .log-feed {
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-      font-size: 11px;
-      line-height: 1.5;
-    }
-    .log-entry {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 10px;
-      border-radius: 4px;
-      transition: background 0.1s;
-      border-left: 2px solid #1e1e22;
-    }
-    .log-entry:hover { background: #121214; }
-    .log-entry .time {
-      color: #5c5c64;
-      font-size: 10px;
-      min-width: 48px;
-      flex-shrink: 0;
-      font-variant-numeric: tabular-nums;
-    }
-    .log-entry .icon {
-      flex-shrink: 0;
-      font-size: 10px;
-      width: 14px;
-      text-align: center;
-    }
-    .log-entry .msg {
-      color: #a1a1aa;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .log-entry.org { border-left-color: #22c55e; }
-    .log-entry.err { border-left-color: #ef4444; }
-    .log-entry.inf { border-left-color: #6366f1; }
-    .log-entry.skp { border-left-color: #8b5cf6; }
-    .log-entry.dup { border-left-color: #5c5c64; }
-    .log-entry.udo { border-left-color: #eab308; }
-    .log-entry .msg.org-msg { color: #22c55e; }
-    .log-entry .msg.err-msg { color: #ef4444; }
-
-    /* ── DETAILED STATS ── */
-    .stats-detail {
-      font-size: 11px;
-      color: #5c5c64;
-      white-space: pre-wrap;
-      margin: 8px 0 0 0;
-      padding: 8px;
-      border-radius: 6px;
-      background: #121214;
-      border: 1px solid #1e1e22;
-      font-family: 'SF Mono', 'JetBrains Mono', monospace;
-    }
-
-    /* ── MODAL ── */
-    .modal-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.65);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s;
-    }
-    .modal-overlay.open { opacity: 1; pointer-events: auto; }
-    .modal-box {
-      background: #18181b;
-      border: 1px solid #1e1e22;
-      border-radius: 12px;
-      padding: 24px 28px;
-      max-width: 420px;
-      width: 90%;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-    }
-    .modal-box h2 { margin: 0 0 10px 0; font-size: 15px; font-weight: 600; color: #e5e5e7; }
-    .modal-box p { font-size: 13px; line-height: 1.6; color: #8a8a90; margin: 0 0 20px 0; }
-    .modal-box .btn-group { justify-content: flex-end; }
-
-    /* ── RESPONSIVE ── */
-    @media (max-width: 720px) {
-      .main { flex-direction: column; }
-      .col-left, .col-right { width: auto; min-width: 0; }
-      .col-right { max-height: 200px; border-left: none; border-top: 1px solid #1e1e22; }
-      .section { padding: 12px 14px; }
-    }
-    @media (max-width: 480px) {
-      .worlds-grid { grid-template-columns: 1fr; }
-      .actions-row { flex-direction: column; align-items: stretch; }
-      .action-group-secondary { margin-left: 0; margin-top: 4px; }
-    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
   </style>
 </head>
 <body>
-  <!-- ═══════════════════════════════════════════════════
-       DISCLAIMER MODAL
-       ═══════════════════════════════════════════════════ -->
-  <div class="modal-overlay" id="disclaimerModal">
-    <div class="modal-box">
-      <h2>Before you start</h2>
-      <p>
-        This tool moves your screenshots into organized folders by world name.
-        While an undo log is kept for the most recent run, please ensure you
-        have backups before proceeding.
-      </p>
-      <div class="btn-group">
-        <button class="btn btn-primary" id="disclaimerAccept">I understand, let's go</button>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark" aria-hidden="true"><img src="app-icon.png" alt=""></div><div class="brand-copy"><div class="brand-name">VRChat Organizer</div><div class="brand-sub">Your world library</div></div></div>
+      <div class="nav-label">Workspace</div>
+      <nav class="nav" aria-label="Main navigation">
+        <button class="active" data-view="library"><span class="nav-icon">▦</span><span>Library</span><span class="nav-count" id="libraryNavCount">0</span></button>
+        <button data-view="timeline"><span class="nav-icon">◷</span><span>Timeline</span></button>
+        <button data-view="collections"><span class="nav-icon">◇</span><span>Collections</span><span class="nav-count" id="collectionsNavCount">0</span></button>
+        <button data-view="activity"><span class="nav-icon">↗</span><span>Activity</span></button>
+      </nav>
+      <div style="height:28px"></div>
+      <div class="nav-label">System</div>
+      <nav class="nav">
+        <button data-view="automation"><span class="nav-icon">⌁</span><span>Automation</span></button>
+        <button data-view="settings"><span class="nav-icon">⚙</span><span>Settings</span></button>
+      </nav>
+      <div class="side-spacer"></div>
+      <div class="watch-card"><div class="watch-top"><i class="pulse" id="watchPulse"></i><span id="watchLabel">Watcher paused</span></div><div class="watch-copy" id="watchCopy">New screenshots are waiting for you.</div><button class="text-btn" id="watchToggle">Start watching →</button></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div class="crumb">VRChat Organizer <span style="color:var(--faint)">/</span> <strong id="crumbTitle">Library</strong></div><div class="top-spacer"></div><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="search" type="search" placeholder="Search worlds and photos"></label><button class="icon-btn" title="Refresh library" id="refresh">↻</button></header>
+      <div class="content">
+        <section class="view active" id="library">
+          <div class="library-head"><div><div class="eyebrow">World library</div><h1 id="welcomeHeading">Welcome back.</h1><p class="intro" id="welcomeIntro">A visual home for every world you have captured. Your newest memories, organized automatically.</p></div><div class="top-spacer"></div><div class="actions"><button class="btn" id="scan">Scan folder</button><button class="btn primary" id="watchMain">Start watching</button></div></div>
+          <div class="stats-line"><div class="stat"><strong id="photoTotal">0</strong><span>photos</span></div><div class="stat"><strong id="worldTotal">0</strong><span>worlds</span></div><div class="stat"><strong id="lastCapture">—</strong><span>last capture</span></div><div class="top-spacer"></div><span style="font-size:11px;color:var(--faint)">Sorted by recent</span></div>
+          <div class="session-status" aria-live="polite"><div class="session-status-item"><i class="session-dot" id="vrcxStatusDot"></i><span>VRCX <strong id="vrcxStatusLabel">Checking…</strong></span></div><div class="session-status-item"><i class="session-dot" id="vrchatStatusDot"></i><span>VRChat <strong id="vrchatStatusLabel">Checking…</strong></span></div><div class="session-status-item"><span id="vrchatDuration">Session time unavailable</span></div></div>
+          <div class="library-tools"><div class="filter"><button class="active" data-filter="all">All worlds</button><button data-filter="favorite">Favourites</button><button data-filter="recent">Recently visited</button></div><select class="sort" id="sort" aria-label="Sort worlds"><option value="recent">Recently visited</option><option value="photos">Most photos</option><option value="name">Name</option></select></div>
+          <div class="world-grid" id="worldGrid"></div>
+        </section>
+        <section class="view" id="timeline"><div class="eyebrow">Timeline</div><h1>Every captured moment.</h1><p class="intro" style="margin-bottom:30px">Browse your screenshots as a living record of the places you visited.</p><div class="timeline" id="timelineList"></div></section>
+        <section class="view" id="collections"><div class="eyebrow">Collections</div><h1>Your collections.</h1><p class="intro" style="margin-bottom:30px">Collections will appear here once you have organized screenshots.</p><div class="empty">No collections yet.</div></section>
+        <section class="view" id="activity"><div class="eyebrow">Activity</div><h1>Your library, in motion.</h1><p class="intro" style="margin-bottom:30px">A quiet record of what Organizer has done for you.</p><div class="empty">No activity yet. Run a scan to get started.</div></section>
+        <section class="view" id="automation"><div class="eyebrow">Automation</div><h1>Let the library keep up.</h1><p class="intro" style="margin-bottom:31px">Organizer can quietly sort new captures while you stay in VR.</p><div class="automation-grid"><div><div class="automation-hero"><h2 id="automationStatus">Watcher is paused.</h2><p>When active, new screenshots are detected and moved into their world folder as soon as they appear.</p><button class="btn primary" id="automationToggle">Start watching</button></div><div class="toggle-row"><div><strong>Watch for new screenshots</strong><small>Organize captures as they arrive</small></div><button class="toggle" id="watchSwitch"><i></i></button></div><div class="toggle-row"><div><strong>Scan all month folders</strong><small>Include older VRChat captures</small></div><button class="toggle on" aria-label="Scan all month folders enabled"><i></i></button></div></div><div><div class="section-title"><h2>Folder</h2></div><div class="setting-list"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="folderPath">~/Pictures/VRChat/VRChat</code><div class="folder-actions"><button class="btn" id="automationAutoLocate" type="button">Auto Locate</button><button class="btn" id="automationChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>Organization</span><code>World / Year / Month</code></div><div class="setting"><span>Metadata source</span><code>VRCX</code></div></div></div></div></section>
+        <section class="view" id="settings"><div class="eyebrow">Settings</div><h1>Make it yours.</h1><p class="intro" style="margin-bottom:31px">The essentials for a library that behaves the way you expect.</p><div class="setting-list" style="max-width:760px"><div class="setting"><span>Screenshot folder</span><div class="folder-setting"><code id="settingsFolder">~/Pictures/VRChat/VRChat</code><div class="folder-actions"><button class="btn" id="settingsAutoLocate" type="button">Auto Locate</button><button class="btn" id="settingsChooseFolder" type="button">Browse…</button></div></div></div><div class="setting"><span>World folder template</span><code>{world}</code></div><div class="setting"><span>Metadata provider</span><code>VRCX · Connected</code></div><div class="setting"><span>Appearance</span><code id="appearanceSetting">Dark · Custom accent</code></div><div class="setting"><span>Welcome name</span><div class="name-setting"><code id="settingsName">Not set</code><button class="btn" id="editName">Edit</button></div></div></div><div class="theme-setting"><h2>Choose your colors</h2><p>Pick an accent that feels like you. Your choice is saved on this device and applied across the library.</p><div class="theme-options" role="group" aria-label="Accent color themes"><button class="theme-swatch" data-theme="violet" style="--swatch:#ab5fef" type="button"><i></i>Violet</button><button class="theme-swatch" data-theme="ocean" style="--swatch:#4bb8d8" type="button"><i></i>Ocean</button><button class="theme-swatch" data-theme="sunset" style="--swatch:#ed8b5b" type="button"><i></i>Sunset</button><button class="theme-swatch" data-theme="forest" style="--swatch:#6fcf97" type="button"><i></i>Forest</button><label class="custom-theme">Custom <input id="customTheme" type="color" value="#ab5fef" aria-label="Choose a custom accent color"></label></div></div><div style="margin-top:24px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="simulate">Preview organization</button><button class="btn" id="undo">Undo last organization</button></div><pre id="previewPanel" style="display:none;margin-top:18px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--muted);border:1px solid var(--line);padding:14px;border-radius:8px"></pre></section>
+      </div>
+    </main>
+  </div>
+  <div class="onboarding" id="onboarding" hidden>
+    <div class="onboarding-panel" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="onboarding-top"><div class="eyebrow">Getting started</div><span class="onboarding-step" id="onboardingStep">Step 1 of 3</span></div>
+      <div class="onboarding-progress" aria-hidden="true"><i id="onboardingProgress"></i></div>
+      <div class="onboarding-step-panel active" data-onboarding-step="1">
+        <h2 id="onboardingTitle">Your screenshots, finally in one place.</h2>
+        <p>VRChat Organizer finds your VRChat captures, groups them by world, and gives you a visual library you can browse instead of a folder full of files.</p>
+        <form class="onboarding-form" id="nameForm">
+          <label class="sr-only" for="nameInput">Your name</label>
+          <input id="nameInput" name="name" type="text" maxlength="40" autocomplete="name" placeholder="What should we call you?" required>
+          <button class="btn primary" type="submit">Show me around</button>
+        </form>
+      </div>
+      <div class="onboarding-step-panel" data-onboarding-step="2">
+        <div class="eyebrow">How it works</div>
+        <h2>From capture to keepsake.</h2>
+        <p>You stay in VR. Organizer handles the tidy-up in the background, and your original screenshots remain on your computer.</p>
+        <div class="onboarding-list-item" style="margin:20px 0 2px"><i class="onboarding-number">!</i><div><b>Before you start: enable VRCX metadata</b><span>VRCX must be installed and saving screenshot metadata must be turned on. Organizer uses that metadata to identify which VRChat world each screenshot came from.</span></div></div>
+        <div class="onboarding-list">
+          <div class="onboarding-list-item"><i class="onboarding-number">1</i><div><b>Capture normally</b><span>Keep taking screenshots in VRChat exactly as you do today.</span></div></div>
+          <div class="onboarding-list-item"><i class="onboarding-number">2</i><div><b>Organize by world</b><span>Run a scan to sort existing captures into clear world folders.</span></div></div>
+          <div class="onboarding-list-item"><i class="onboarding-number">3</i><div><b>Browse your memories</b><span>Find worlds, timelines, favourites, and collections from one calm library.</span></div></div>
+        </div>
+        <div class="onboarding-path" id="onboardingPath">Looking up your VRChat screenshots folder…</div>
+        <div class="folder-actions onboarding-folder-actions"><button class="btn" id="onboardingAutoLocate" type="button">Auto Locate</button><button class="btn" id="onboardingChooseFolder" type="button">Choose Folder</button></div>
+        <div class="onboarding-actions"><button class="onboarding-link" id="onboardingInfoBack" type="button">← Back</button><div class="right"><button class="btn primary" id="onboardingContinue" type="button">Continue</button></div></div>
+      </div>
+      <div class="onboarding-step-panel" data-onboarding-step="3">
+        <div class="eyebrow">Choose your starting point</div>
+        <h2>Let’s get your library ready.</h2>
+        <p>Start with a one-time scan, or finish setup and explore the app first. You can change this any time from Automation.</p>
+        <div class="onboarding-list-item" style="margin:0 0 2px"><i class="onboarding-number">!</i><div><b>VRCX metadata must be on</b><span>If metadata is disabled, Organizer cannot reliably match screenshots to worlds. Turn it on in VRCX before scanning.</span></div></div>
+        <div class="onboarding-choice">
+          <button class="btn primary" id="onboardingScan" type="button"><strong>Scan my screenshots</strong><small>Organize what you already have now.</small></button>
+          <button class="btn" id="onboardingExplore" type="button"><strong>Explore first</strong><small>I’ll run the scan when I’m ready.</small></button>
+        </div>
+        <div class="onboarding-actions"><button class="onboarding-link" id="onboardingBack" type="button">← Back</button><div class="right"><button class="onboarding-link" id="onboardingSkip" type="button">Skip setup</button></div></div>
       </div>
     </div>
   </div>
-
-  <!-- ═══════════════════════════════════════════════════
-       APP
-       ═══════════════════════════════════════════════════ -->
-  <div class="app" id="appRoot">
-    <!-- ── HEADER ── -->
-    <div class="header">
-      <div class="header-brand">VRChat <span>Organizer</span></div>
-      <div class="header-spacer"></div>
-      <div class="header-actions">
-        <button class="header-btn active" id="modeToggleBtn" title="Toggle advanced mode">Simple</button>
-      </div>
-    </div>
-
-    <!-- ── MAIN ── -->
-    <div class="main">
-      <!-- LEFT COLUMN -->
-      <div class="col-left">
-
-        <!-- Folder section -->
-        <div class="section">
-          <div class="section-label">Screenshot Folder</div>
-          <div class="section-content">
-            <div class="input-row">
-              <input id="folder" placeholder="~/Pictures/VRChat/VRChat" />
-              <button class="btn btn-secondary btn-sm" id="detectBtn" title="Auto-detect">Auto</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Status section -->
-        <div class="section">
-          <div class="section-label">Status</div>
-          <div class="section-content">
-            <div class="status-bar">
-              <div class="watch-radar" id="watchRadar">
-                <div class="ring"></div>
-                <div class="ring"></div>
-                <div class="ring"></div>
-                <div class="ring"></div>
-                <div class="dot"></div>
-              </div>
-              <span class="status-dot ready" id="statusDot"></span>
-              <span class="status-text" id="statusText">Ready</span>
-              <span class="status-extra" id="statusExtra"></span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Actions section -->
-        <div class="section">
-          <div class="section-label">Actions</div>
-          <div class="section-content">
-            <div class="actions-row">
-              <div class="action-group-primary">
-                <button class="btn btn-primary" id="runBtn" title="Scan and organize all screenshots by world name">Run Once</button>
-                <button class="btn btn-primary" id="watchStartBtn" title="Start watching for new screenshots">Watch</button>
-                <button class="btn btn-secondary" id="watchStopBtn" style="display:none;" title="Stop watching">Stop</button>
-              </div>
-              <div class="action-group-secondary">
-                <button class="btn btn-tertiary" id="undoBtn" title="Undo the last organization">Undo</button>
-                <button class="btn btn-tertiary" id="clearBtn" title="Clear stats and log">Clear</button>
-              </div>
-            </div>
-            <!-- Watch stats -->
-            <div id="watchStatsSimple" style="display:none;margin-top:10px;">
-              <div class="pill-row">
-                <span class="pill organized"><span id="watchOrganizedSimple">0</span> organized</span>
-                <span class="pill"><span id="watchTotalSimple">0</span> total</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Stats section (advanced only) -->
-        <div class="section mode-advanced-only" id="statsCard" style="display:none;">
-          <div class="section-label">Results</div>
-          <div class="section-content">
-            <div class="pill-row" id="statRow"></div>
-            <div style="margin-top:6px;">
-              <button class="btn btn-tertiary btn-sm" id="toggleRawBtn" style="font-size:10px;padding:2px 8px;">View raw output</button>
-            </div>
-            <pre class="stats-detail" id="statsDetail" style="display:none;"></pre>
-          </div>
-        </div>
-
-        <!-- Advanced settings (injected here) -->
-
-        <!-- Worlds section -->
-        <div class="section" style="flex:1;display:flex;flex-direction:column;min-height:0;">
-          <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
-            <span>Organized Worlds</span>
-            <span class="worlds-summary" id="worldsSummary"></span>
-          </div>
-          <div class="section-content" style="flex:1;overflow-y:auto;min-height:0;">
-            <div class="worlds-grid" id="worldsList">
-              <div class="empty-state">Run the organizer to see worlds here.</div>
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- RIGHT COLUMN: Activity Log (advanced) -->
-      <div class="col-right">
-        <div class="section" style="flex:1;display:flex;flex-direction:column;min-height:0;">
-          <div class="section-label" style="display:flex;justify-content:space-between;">
-            <span>Activity Log</span>
-            <span style="font-size:10px;color:#5c5c64;" id="activityCount">0 entries</span>
-          </div>
-          <div class="section-content" style="flex:1;overflow-y:auto;min-height:0;">
-            <div class="log-feed" id="activityFeed">
-              <div class="log-entry inf"><span class="time">—</span><span class="icon">●</span><span class="msg">Ready</span></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  <div class="toast" id="toast"></div>
   <script>
-    // ═══════════════════════════════════════════════════
-    // Tauri globals — Universal wrapper for Tauri v2 API
-    // ═══════════════════════════════════════════════════
-    // In Tauri v2, __TAURI_INTERNALS__ only has invoke (no listen).
-    // __TAURI__ (global) has event.listen + core.invoke when withGlobalTauri: true.
-    // We wrap both to be resilient regardless of availability.
-    const invoke = (window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke);
-    const listen  = (window.__TAURI__?.event?.listen || function() {
-      console.warn('Tauri event system not available');
-      return Promise.resolve(() => {});
+    const invoke = window.__TAURI__?.core?.invoke || (async (cmd, args) => {
+      if (cmd === 'get_default_path') return '~/Pictures/VRChat/VRChat';
+      if (cmd === 'validate_folder') return args?.folderPath || '~/Pictures/VRChat/VRChat';
+      if (cmd === 'is_watching') return false;
+      if (cmd === 'get_vrchat_status') return { vrcxRunning: false, vrchatRunning: false, vrchatStartedAt: null };
+      if (cmd === 'organize_folder' || cmd === 'simulate_folder' || cmd === 'get_activity' || cmd === 'start_watching' || cmd === 'stop_watching' || cmd === 'undo_last_run') return Promise.reject('This action requires the desktop app');
+      return {};
     });
-
-    // ═══════════════════════════════════════════════════
-    // DOM refs
-    // ═══════════════════════════════════════════════════
-    const $ = id => document.getElementById(id);
-    const folder        = $('folder');
-    const detectBtn     = $('detectBtn');
-    const runBtn        = $('runBtn');
-    const undoBtn       = $('undoBtn');
-    const watchStart    = $('watchStartBtn');
-    const watchStop     = $('watchStopBtn');
-    const clearBtn      = $('clearBtn');
-    const statusDot     = $('statusDot');
-    const statusText    = $('statusText');
-    const statusExtra   = $('statusExtra');
-    const watchRadar    = $('watchRadar');
-    const modeToggleBtn = $('modeToggleBtn');
-    const worldsList    = $('worldsList');
-    const worldsSummary = $('worldsSummary');
-    const statsCard     = $('statsCard');
-    const statRow       = $('statRow');
-    const statsDetail   = $('statsDetail');
-    const toggleRawBtn  = $('toggleRawBtn');
-    const activityFeed  = $('activityFeed');
-    const activityCount = $('activityCount');
-    const watchStatsSimple = $('watchStatsSimple');
-    const watchOrganizedSimple = $('watchOrganizedSimple');
-    const watchTotalSimple = $('watchTotalSimple');
-    const appRoot       = $('appRoot');
-    const disclaimerModal = $('disclaimerModal');
-    const disclaimerAccept = $('disclaimerAccept');
-
-    // ═══════════════════════════════════════════════════
-    // State
-    // ═══════════════════════════════════════════════════
-    let activityEntries = 0;
-    let watchOrganizedTotal = 0;
-    let watchTotalProcessed = 0;
-    let accumulatedWorlds = {};
-    let watchAccumulatedStats = null;
-
-    try {
-      const saved = localStorage.getItem('vrchat-organizer-worlds');
-      if (saved) accumulatedWorlds = JSON.parse(saved);
-    } catch {}
-
-    // ═══════════════════════════════════════════════════
-    // Mode toggle
-    // ═══════════════════════════════════════════════════
-    function setMode(mode) {
-      document.documentElement.setAttribute('data-mode', mode);
-      modeToggleBtn.textContent = mode === 'simple' ? 'Simple' : 'Advanced';
-      try { localStorage.setItem('vrchat-organizer-mode', mode); } catch {}
+    const listen = window.__TAURI__?.event?.listen || (async () => () => {});
+    const images = [];
+    const photoImages = [];
+    let watching = false, currentFilter = 'all';
+    const $ = (s) => document.querySelector(s);
+    const nameStorageKey = 'vrchat-organizer-name';
+    const folderStorageKey = 'vrchat-organizer-folder';
+    const onboardingStorageKey = 'vrchat-organizer-onboarding-complete';
+    const themeStorageKey = 'vrchat-organizer-theme';
+    const themes = {
+      violet: '#ab5fef',
+      ocean: '#4bb8d8',
+      sunset: '#ed8b5b',
+      forest: '#6fcf97'
+    };
+    let onboardingStep = 1;
+    const greetingParts = [
+      { start: 5, label: 'Good morning' },
+      { start: 12, label: 'Good afternoon' },
+      { start: 17, label: 'Good evening' },
+      { start: 22, label: 'Good night' }
+    ];
+    function getGreeting() {
+      const hour = new Date().getHours();
+      return [...greetingParts].reverse().find(part => hour >= part.start)?.label || 'Good morning';
     }
-    function toggleMode() {
-      const current = document.documentElement.getAttribute('data-mode') || 'simple';
-      setMode(current === 'simple' ? 'advanced' : 'simple');
+    function hexToRgb(hex) {
+      const value = hex.replace('#', '');
+      return [parseInt(value.slice(0, 2), 16), parseInt(value.slice(2, 4), 16), parseInt(value.slice(4, 6), 16)];
     }
-    try {
-      const saved = localStorage.getItem('vrchat-organizer-mode');
-      if (saved) setMode(saved); else setMode('simple');
-    } catch { setMode('simple'); }
-    modeToggleBtn.addEventListener('click', toggleMode);
-
-    // ═══════════════════════════════════════════════════
-    // Disclaimer
-    // ═══════════════════════════════════════════════════
-    try {
-      (function checkDisclaimer() {
-        const shown = localStorage.getItem('vrchat-organizer-disclaimer-shown');
-        if (!shown) disclaimerModal.classList.add('open');
-      })();
-    } catch(e) { console.warn('Disclaimer check failed:', e); }
-    disclaimerAccept.addEventListener('click', () => {
-      disclaimerModal.classList.remove('open');
-      try { localStorage.setItem('vrchat-organizer-disclaimer-shown', 'true'); } catch {}
-    });
-
-    // ═══════════════════════════════════════════════════
-    // Helpers
-    // ═══════════════════════════════════════════════════
-    function getConfig() {
-      return {
-        folderPath: folder.value || '~/Pictures/VRChat/VRChat',
-        dryRun: false,
-        scanAllMonths: false,
-        singleFolder: false,
-        template: '{world}',
-      };
+    function rgbString(rgb, alpha = 1) {
+      return alpha === 1 ? `rgb(${rgb.join(',')})` : `rgba(${rgb.join(',')},${alpha})`;
     }
-
-    function getAdvancedConfig() {
-      const dryRun = ($('dryRun') && $('dryRun').checked) || false;
-      const scanAll = ($('scanAllMonths') && $('scanAllMonths').checked) || false;
-      const singleFolderEl = $('singleFolder');
-      const singleFolder = singleFolderEl ? singleFolderEl.checked : true;
-      const templateEl = $('template');
-      const template = templateEl ? templateEl.value || '{world}' : '{world}';
-      return {
-        folderPath: folder.value || '~/Pictures/VRChat/VRChat',
-        dryRun,
-        scanAllMonths: scanAll,
-        singleFolder,
-        template,
-      };
+    function mixColor(color, target, amount) {
+      return color.map((channel, index) => Math.round(channel + (target[index] - channel) * amount));
     }
-
-    function setStatus(state, text, extra) {
-      statusDot.className = 'status-dot';
-      if (state === 'active') statusDot.classList.add('active');
-      else if (state === 'error') statusDot.classList.add('error');
-      else if (state === 'busy') statusDot.classList.add('busy');
-      else statusDot.classList.add('ready');
-      statusText.textContent = text;
-      statusExtra.textContent = extra || '';
+    function applyTheme(accent, themeName = 'custom') {
+      const root = document.documentElement;
+      const rgb = hexToRgb(accent);
+      root.style.setProperty('--accent', accent);
+      root.style.setProperty('--accent-bright', accent);
+      root.style.setProperty('--accent-deep', rgbString(mixColor(rgb, [0, 0, 0], .55)));
+      root.style.setProperty('--accent-soft', rgbString(rgb, .2));
+      root.style.setProperty('--line', rgbString(rgb, .2));
+      root.style.setProperty('--green', accent);
+      $('#customTheme').value = accent;
+      document.querySelectorAll('.theme-swatch').forEach(button => button.classList.toggle('active', button.dataset.theme === themeName));
+      $('#appearanceSetting').textContent = `Dark · ${themeName === 'custom' ? 'Custom accent' : `${themeName[0].toUpperCase()}${themeName.slice(1)} accent`}`;
     }
-
-    function addActivity(type, message) {
-      const now = new Date();
-      const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const clsMap = { organized: 'org', skipped: 'skp', error: 'err', info: 'inf', already: 'dup', undone: 'udo', watch: 'inf' };
-      const iconMap = { organized: '✓', skipped: '→', error: '✗', info: '●', already: '–', undone: '↩', watch: '●' };
-      const entry = document.createElement('div');
-      entry.className = `log-entry ${clsMap[type] || 'inf'}`;
-      entry.innerHTML = `<span class="time">${time}</span><span class="icon">${iconMap[type] || '●'}</span><span class="msg">${message}</span>`;
-      activityFeed.appendChild(entry);
-      activityFeed.scrollTop = activityFeed.scrollHeight;
-      activityEntries++;
-      activityCount.textContent = `${activityEntries} entries`;
+    function loadTheme() {
+      const saved = localStorage.getItem(themeStorageKey);
+      const preset = Object.entries(themes).find(([, color]) => color === saved);
+      applyTheme(saved || themes.violet, preset?.[0] || 'custom');
     }
-
-    function renderWorlds() {
-      const entries = Object.entries(accumulatedWorlds);
-      worldsList.innerHTML = '';
-      if (entries.length === 0) {
-        worldsList.innerHTML = '<div class="empty-state">Run the organizer to see worlds here.</div>';
-        worldsSummary.textContent = '';
+    function saveTheme(accent, themeName) {
+      localStorage.setItem(themeStorageKey, accent);
+      applyTheme(accent, themeName);
+      toast('Accent color updated');
+    }
+    function updateWelcome() {
+      const name = localStorage.getItem(nameStorageKey)?.trim();
+      $('#welcomeHeading').textContent = name ? `${getGreeting()}, ${name}.` : 'Welcome back.';
+      $('#welcomeIntro').textContent = name ? 'Your newest memories, organized automatically.' : 'A visual home for every world you have captured. Your newest memories, organized automatically.';
+      $('#settingsName').textContent = name || 'Not set';
+    }
+    function setFolderPath(path) {
+      $('#folderPath').textContent = path;
+      $('#settingsFolder').textContent = path;
+      $('#onboardingPath').textContent = path;
+      localStorage.setItem(folderStorageKey, path);
+    }
+    async function validateAndSetFolder(path) {
+      if (!path) return false;
+      try {
+        const validated = await invoke('validate_folder', { folderPath: path });
+        setFolderPath(validated || path);
+        toast('Screenshot folder updated');
+        return true;
+      } catch (error) {
+        toast(`Folder could not be used: ${String(error)}`);
+        return false;
+      }
+    }
+    async function chooseFolder() {
+      const dialog = window.__TAURI__?.dialog;
+      if (!dialog?.open) {
+        toast('Folder selection is only available in the desktop app');
         return;
       }
-      entries.sort((a, b) => b[1] - a[1]);
-      const totalPhotos = entries.reduce((sum, [,c]) => sum + c, 0);
-      worldsSummary.textContent = `${entries.length} worlds · ${totalPhotos} photos`;
-      for (const [worldName, count] of entries) {
-        const item = document.createElement('div');
-        item.className = 'world-item';
-        item.innerHTML = `<span class="name">${worldName}</span><span class="count"><span class="photocount">◆</span> ${count}</span>`;
-        worldsList.appendChild(item);
-      }
-    }
-
-    function saveWorlds() {
-      try { localStorage.setItem('vrchat-organizer-worlds', JSON.stringify(accumulatedWorlds)); } catch {}
-    }
-
-    function mergeWorlds(stats) {
-      const worlds = stats.worlds || {};
-      for (const [name, count] of Object.entries(worlds)) {
-        accumulatedWorlds[name] = (accumulatedWorlds[name] || 0) + count;
-      }
-      saveWorlds();
-      renderWorlds();
-    }
-
-    // Renders stats pills + raw JSON — no side effects (no setStatus, no mergeWorlds)
-    function renderStatsPills(stats) {
-      statsCard.style.display = '';
-      statRow.innerHTML = '';
-      const items = [
-        { label: 'Organized', count: stats.organized, cls: 'organized' },
-        { label: 'Already', count: stats.already_organized, cls: '' },
-        { label: 'No meta', count: stats.no_metadata, cls: '' },
-        { label: 'Errors', count: stats.errors, cls: stats.errors > 0 ? 'error' : '' },
-        { label: 'Undone', count: stats.undone, cls: '' },
-        { label: 'Total', count: stats.total, cls: '' },
-      ];
-      for (const item of items) {
-        if (item.count > 0 || item.label === 'Total') {
-          const pill = document.createElement('span');
-          pill.className = `pill ${item.cls}`;
-          pill.textContent = `${item.label}: ${item.count}`;
-          statRow.appendChild(pill);
-        }
-      }
-      statsDetail.textContent = JSON.stringify(stats, null, 2);
-      statsDetail.style.display = 'none';
-      if (toggleRawBtn) toggleRawBtn.textContent = 'View raw output';
-    }
-
-    function showStats(stats, updateWatchCounters = true) {
-      statsCard.style.display = '';
-      statRow.innerHTML = '';
-      const items = [
-        { label: 'Organized', count: stats.organized, cls: 'organized' },
-        { label: 'Already', count: stats.already_organized, cls: '' },
-        { label: 'No meta', count: stats.no_metadata, cls: '' },
-        { label: 'Errors', count: stats.errors, cls: stats.errors > 0 ? 'error' : '' },
-        { label: 'Undone', count: stats.undone, cls: '' },
-        { label: 'Total', count: stats.total, cls: '' },
-      ];
-      for (const item of items) {
-        if (item.count > 0 || item.label === 'Total') {
-          const pill = document.createElement('span');
-          pill.className = `pill ${item.cls}`;
-          pill.textContent = `${item.label}: ${item.count}`;
-          statRow.appendChild(pill);
-        }
-      }
-      statsDetail.textContent = JSON.stringify(stats, null, 2);
-      statsDetail.style.display = 'none';
-      if (toggleRawBtn) toggleRawBtn.textContent = 'View raw output';
-      setStatus('active', 'Done');
-      mergeWorlds(stats);
-      if (updateWatchCounters && watchStart.style.display === 'none') {
-        watchStatsSimple.style.display = '';
-        watchOrganizedSimple.textContent = stats.organized || 0;
-        watchTotalSimple.textContent = stats.total || 0;
-      }
-    }
-
-    function setWatchState(isWatching) {
-      if (isWatching) {
-        watchStart.style.display = 'none';
-        watchStop.style.display = 'inline-flex';
-        watchStatsSimple.style.display = '';
-        watchRadar.classList.add('active');
-        setStatus('active', 'Watching');
-        runBtn.disabled = true;
-        undoBtn.disabled = true;
-      } else {
-        watchOrganizedTotal = 0;
-        watchTotalProcessed = 0;
-        watchAccumulatedStats = null;
-        watchOrganizedSimple.textContent = '0';
-        watchTotalSimple.textContent = '0';
-        watchStart.style.display = 'inline-flex';
-        watchStop.style.display = 'none';
-        watchStatsSimple.style.display = 'none';
-        watchRadar.classList.remove('active');
-        setStatus('active', 'Stopped');
-        runBtn.disabled = false;
-        checkUndo();
-      }
-    }
-
-    async function checkUndo() {
       try {
-        const has = await invoke('has_undo', { folderPath: folder.value || '~/Pictures/VRChat/VRChat' });
-        undoBtn.disabled = !has;
-      } catch { undoBtn.disabled = true; }
-    }
-
-    // ── Inject advanced settings ──
-    let advancedSettingsInjected = false;
-    function injectAdvancedSettings() {
-      if (advancedSettingsInjected) return;
-      const el = document.createElement('div');
-      el.className = 'section mode-advanced-only';
-      el.id = 'settingsSection';
-      el.innerHTML = `
-        <div class="section-label">Settings</div>
-        <div class="section-content">
-          <div class="input-row" style="margin-bottom:8px;">
-            <input id="template" value="{world}" placeholder="{world}" style="flex:1;" />
-            <span style="font-size:11px;color:#5c5c64;white-space:nowrap;">Template</span>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <label class="checkbox-label">
-              <input id="dryRun" type="checkbox" /> Dry run
-            </label>
-            <label class="checkbox-label">
-              <input id="scanAllMonths" type="checkbox" /> All months
-            </label>
-            <label class="checkbox-label">
-              <input id="singleFolder" type="checkbox" checked /> Single folder
-            </label>
-          </div>
-        </div>
-      `;
-      const statsEl = document.getElementById('statsCard');
-      if (statsEl && statsEl.parentNode) {
-        statsEl.parentNode.insertBefore(el, statsEl.nextSibling);
+        const selected = await dialog.open({ directory: true, multiple: false, title: 'Choose VRChat screenshot folder' });
+        if (typeof selected === 'string') await validateAndSetFolder(selected);
+      } catch (error) {
+        toast(`Folder picker could not be opened: ${String(error)}`);
       }
-      advancedSettingsInjected = true;
     }
-
-    const observer = new MutationObserver(() => {
-      if (document.documentElement.getAttribute('data-mode') === 'advanced') injectAdvancedSettings();
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode'] });
-    if (document.documentElement.getAttribute('data-mode') === 'advanced') injectAdvancedSettings();
-
-    // ═══════════════════════════════════════════════════
-    // Event listeners / Init
-    // ═══════════════════════════════════════════════════
-    document.addEventListener('DOMContentLoaded', async () => {
+    async function autoLocateFolder() {
       try {
-        const defaultPath = await invoke('get_default_path');
-        folder.value = defaultPath;
-      } catch { folder.value = '~/Pictures/VRChat/VRChat'; }
-
-      checkUndo();
-      setStatus('ready', 'Ready');
-      renderWorlds();
-
+        await validateAndSetFolder(await invoke('get_default_path'));
+      } catch (error) {
+        toast(`Automatic folder detection failed: ${String(error)}`);
+      }
+    }
+    function setOnboardingStep(step) {
+      onboardingStep = step;
+      document.querySelectorAll('[data-onboarding-step]').forEach(panel => panel.classList.toggle('active', Number(panel.dataset.onboardingStep) === step));
+      $('#onboardingStep').textContent = `Step ${step} of 3`;
+      $('#onboardingProgress').style.width = `${step * 33.33}%`;
+      if (step === 2) $('#onboardingPath').textContent = $('#folderPath').textContent || 'Looking up your VRChat screenshots folder…';
+      if (step === 1) requestAnimationFrame(() => $('#nameInput').focus());
+    }
+    function openNameOnboarding() {
+      const name = localStorage.getItem(nameStorageKey) || '';
+      $('#nameInput').value = name;
+      $('#onboarding').hidden = false;
+      setOnboardingStep(1);
+    }
+    function closeNameOnboarding() {
+      $('#onboarding').hidden = true;
+    }
+    function completeOnboarding() {
+      localStorage.setItem(onboardingStorageKey, 'true');
+      closeNameOnboarding();
+    }
+    async function scanFromOnboarding() {
+      const button = $('#onboardingScan');
+      button.disabled = true;
+      button.querySelector('strong').textContent = 'Scanning…';
       try {
-        const watching = await invoke('is_watching');
-        if (watching) setWatchState(true);
-      } catch {}
-
-      detectBtn.addEventListener('click', async () => {
-        try {
-          const p = await invoke('get_default_path');
-          folder.value = p;
-          addActivity('info', `Auto-detected: ${p}`);
-        } catch {
-          addActivity('error', 'Could not auto-detect folder');
-        }
-      });
-
-      // Watch initial scan
-      try {
-        await listen('watch-initial-scan', (event) => {
-          const data = event.payload;
-          if (data.error) addActivity('error', `Watch: ${data.error}`);
-          else if (data.stats) {
-            watchOrganizedTotal = data.stats.organized || 0;
-            watchTotalProcessed = data.stats.total || 0;
-            // Seed the accumulated stats
-            watchAccumulatedStats = {
-              organized: data.stats.organized || 0,
-              already_organized: data.stats.already_organized || 0,
-              no_metadata: data.stats.no_metadata || 0,
-              errors: data.stats.errors || 0,
-              undone: data.stats.undone || 0,
-              total: data.stats.total || 0,
-            };
-            if (data.stats.organized > 0 || data.stats.total > 0) {
-              addActivity('organized', `Watch: organized ${data.stats.organized} file(s)`);
-              if (data.stats.already_organized > 0) addActivity('already', `Watch: ${data.stats.already_organized} already organized`);
-              showStats(data.stats);
-              renderStatsPills(watchAccumulatedStats);
-              watchStatsSimple.style.display = '';
-              watchOrganizedSimple.textContent = watchOrganizedTotal;
-              watchTotalSimple.textContent = watchTotalProcessed;
-            } else addActivity('info', 'Watch: everything organized');
-          }
-        });
-      } catch (e) { console.warn('Watch initial scan event not available:', e); }
-
-      try {
-        await listen('watch-organized', (event) => {
-          const data = event.payload;
-          const stats = data.stats || {};
-          const fileName = (data.file||'').split('/').pop() || (data.file||'').split('\\').pop() || data.file;
-          if (stats.organized > 0) {
-            watchOrganizedTotal += stats.organized;
-            addActivity('organized', `Organized: ${fileName}`);
-          }
-          watchTotalProcessed += stats.total || 1;
-          watchOrganizedSimple.textContent = watchOrganizedTotal;
-          watchTotalSimple.textContent = watchTotalProcessed;
-          // Accumulate into running totals for the watch session
-          if (!watchAccumulatedStats) {
-            watchAccumulatedStats = { organized:0, already_organized:0, no_metadata:0, errors:0, undone:0, total:0 };
-          }
-          watchAccumulatedStats.organized += stats.organized || 0;
-          watchAccumulatedStats.already_organized += stats.already_organized || 0;
-          watchAccumulatedStats.no_metadata += stats.no_metadata || 0;
-          watchAccumulatedStats.errors += stats.errors || 0;
-          watchAccumulatedStats.undone += stats.undone || 0;
-          watchAccumulatedStats.total += stats.total || 1;
-          renderStatsPills(watchAccumulatedStats);
-          mergeWorlds(stats);
-        });
-        await listen('watch-status', (event) => {
-          const data = event.payload;
-          if (data.status === 'started') addActivity('info', `Watching: ${data.path||'folder'}`);
-          else if (data.status === 'stopped') { addActivity('info', 'Watch stopped.'); setWatchState(false); }
-          else if (data.status === 'heartbeat') { setStatus('active', 'Watching'); }
-        });
-        await listen('watch-error', (event) => {
-          addActivity('error', `Error: ${event.payload.error || 'Unknown'}`);
-          setStatus('error', 'Error');
-        });
-      } catch (e) { console.warn('Event system not available:', e); }
-
-      runBtn.addEventListener('click', async () => {
-        const isAdvanced = document.documentElement.getAttribute('data-mode') === 'advanced';
-        const config = isAdvanced ? getAdvancedConfig() : getConfig();
-        runBtn.disabled = true; undoBtn.disabled = true;
-        setStatus('busy', 'Organizing');
-        addActivity('info', 'Starting organization...');
-        try {
-          const result = await invoke('organize_folder', config);
-          const stats = typeof result === 'string' ? JSON.parse(result) : result;
-          showStats(stats);
-          if (stats.organized > 0) addActivity('organized', `Organized ${stats.organized} file(s)`);
-          if (stats.already_organized > 0) addActivity('already', `${stats.already_organized} already organized`);
-          if (stats.no_metadata > 0) addActivity('skipped', `${stats.no_metadata} skipped (no metadata)`);
-          if (stats.errors > 0) addActivity('error', `${stats.errors} error(s)`);
-          checkUndo();
-        } catch (err) { addActivity('error', `Run failed: ${err}`); setStatus('error', 'Error'); }
-        finally { runBtn.disabled = false; }
-      });
-
-      undoBtn.addEventListener('click', async () => {
-        const config = getConfig();
-        undoBtn.disabled = true;
-        setStatus('busy', 'Undoing');
-        addActivity('info', 'Undoing...');
-        try {
-          const result = await invoke('undo_last_run', { folderPath: config.folderPath });
-          const stats = typeof result === 'string' ? JSON.parse(result) : result;
-          if (stats.undone > 0) addActivity('undone', `Restored ${stats.undone} file(s)`);
-          showStats(stats);
-          checkUndo();
-        } catch (err) { addActivity('error', `Undo failed: ${err}`); setStatus('error', 'Error'); undoBtn.disabled = false; }
-      });
-
-      watchStart.addEventListener('click', async () => {
-        const isAdvanced = document.documentElement.getAttribute('data-mode') === 'advanced';
-        const config = isAdvanced ? getAdvancedConfig() : getConfig();
-        watchStart.disabled = true;
-        setStatus('busy', 'Starting watcher');
-        addActivity('info', 'Starting watch mode...');
-        try {
-          const result = await invoke('start_watching', config);
-          if (result === 'watching') { setWatchState(true); addActivity('watch', 'Watch active — waiting for new screenshots...'); }
-        } catch (err) { addActivity('error', `Watcher failed: ${err}`); setStatus('error', 'Error'); }
-        finally { watchStart.disabled = false; }
-      });
-
-      watchStop.addEventListener('click', async () => {
-        watchStop.disabled = true;
-        addActivity('info', 'Stopping watcher...');
-        try { await invoke('stop_watching'); setWatchState(false); setStatus('active', 'Stopped'); addActivity('info', 'Watch stopped.'); }
-        catch (err) { addActivity('error', `Stop failed: ${err}`); }
-        finally { watchStop.disabled = false; }
-      });
-
-      clearBtn.addEventListener('click', () => {
-        activityFeed.innerHTML = '<div class="log-entry inf"><span class="time">—</span><span class="icon">●</span><span class="msg">Ready</span></div>';
-        activityEntries = 0;
-        activityCount.textContent = '0 entries';
-        statsCard.style.display = 'none';
-        setStatus('ready', 'Cleared');
-        addActivity('info', 'Log cleared');
-        accumulatedWorlds = {};
-        watchAccumulatedStats = null;
-        saveWorlds();
+        const result = await invoke('organize_folder', { folderPath: $('#folderPath').textContent, dryRun: false, scanAllMonths: true, singleFolder: false, template: '{world}' });
+        completeOnboarding();
+        toast(result?.organized ? `${result.organized} screenshots organized` : 'Scan complete — your library is ready');
         renderWorlds();
-      });
-
-      folder.addEventListener('input', checkUndo);
-
-      // Toggle raw JSON output
-      if (toggleRawBtn) {
-        toggleRawBtn.addEventListener('click', () => {
-          const isHidden = statsDetail.style.display === 'none';
-          statsDetail.style.display = isHidden ? '' : 'none';
-          toggleRawBtn.textContent = isHidden ? 'Hide raw output' : 'View raw output';
-        });
+      } catch (error) {
+        toast(`Scan could not be completed: ${String(error)}`);
+      } finally {
+        button.disabled = false;
+        button.querySelector('strong').textContent = 'Scan my screenshots';
+      }
+    }
+    function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
+    let vrchatStartedAt = null;
+    function formatDuration(seconds) {
+      const total = Math.max(0, Math.floor(seconds));
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const secs = total % 60;
+      return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m ${String(secs).padStart(2, '0')}s`;
+    }
+    function renderVrChatStatus(status) {
+      const vrcxRunning = Boolean(status?.vrcxRunning);
+      const vrchatRunning = Boolean(status?.vrchatRunning);
+      vrchatStartedAt = status?.vrchatStartedAt ? Number(status.vrchatStartedAt) : null;
+      $('#vrcxStatusDot').classList.toggle('live', vrcxRunning);
+      $('#vrchatStatusDot').classList.toggle('live', vrchatRunning);
+      $('#vrcxStatusLabel').textContent = vrcxRunning ? 'running' : 'not running';
+      $('#vrchatStatusLabel').textContent = vrchatRunning ? 'open' : 'closed';
+      $('#vrchatDuration').textContent = vrchatStartedAt ? `Open for ${formatDuration(Date.now() / 1000 - vrchatStartedAt)}` : 'Session time unavailable';
+    }
+    async function refreshVrChatStatus() {
+      try {
+        renderVrChatStatus(await invoke('get_vrchat_status'));
+      } catch (_) {
+        renderVrChatStatus(null);
+      }
+    }
+    function renderWorlds() {
+      const query = ($('#search').value || '').toLowerCase().trim();
+      const sort = $('#sort').value;
+      updateNavigationCounts();
+      let list = images.filter(x => currentFilter === 'all' || (currentFilter === 'favorite' && x[4]) || (currentFilter === 'recent' && x[3] > 15)).filter(x => x[0].toLowerCase().includes(query) || x[1].toLowerCase().includes(query));
+      list = list.sort((a,b) => sort === 'name' ? a[0].localeCompare(b[0]) : sort === 'photos' ? b[3]-a[3] : images.indexOf(a)-images.indexOf(b));
+      $('#worldGrid').innerHTML = list.length ? list.map((x,i) => `<article class="world" style="animation-delay:${i*35}ms"><div class="cover"><img loading="lazy" src="${x[2]}" alt="${x[0]} world cover"><button class="favorite ${x[4]?'on':''}" aria-label="Favourite ${x[0]}">★</button><div class="cover-meta"><span>${x[1]}</span><span>${x[3]} photos</span></div></div><div class="world-info"><div><div class="world-title">${x[0]}</div><div class="world-place">${i < 3 ? 'Visited today' : 'Visited this month'}</div></div><div class="world-count">${String(x[3]).padStart(2,'0')}</div></div></article>`).join('') : '<div class="empty">No worlds match that search.</div>';
+      document.querySelectorAll('.favorite').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); btn.classList.toggle('on'); toast(btn.classList.contains('on') ? 'Added to favourites' : 'Removed from favourites'); }));
+    }
+    function updateNavigationCounts() {
+      $('#libraryNavCount').textContent = String(images.length);
+      $('#collectionsNavCount').textContent = '0';
+      $('#photoTotal').textContent = String(images.reduce((total, image) => total + (Number(image[3]) || 0), 0));
+      $('#worldTotal').textContent = String(images.length);
+    }
+    function renderTimeline() { $('#timelineList').innerHTML = '<div class="empty">No screenshots yet. Scan your selected folder to build your timeline.</div>'; }
+    function setWatching(next) { watching = next; $('#watchPulse').classList.toggle('live', watching); $('#watchLabel').textContent = watching ? 'Watcher is live' : 'Watcher paused'; $('#watchCopy').textContent = watching ? 'New captures will be organized automatically.' : 'New screenshots are waiting for you.'; $('#watchToggle').textContent = watching ? 'Pause watching →' : 'Start watching →'; $('#watchMain').textContent = watching ? 'Watching now' : 'Start watching'; $('#automationToggle').textContent = watching ? 'Pause watching' : 'Start watching'; $('#automationStatus').textContent = watching ? 'Watcher is active.' : 'Watcher is paused.'; $('#watchSwitch').classList.toggle('on', watching); }
+    document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const view = btn.dataset.view; document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; }));
+    let searchRenderTimer;
+    $('#search').addEventListener('input', () => {
+      clearTimeout(searchRenderTimer);
+      searchRenderTimer = setTimeout(renderWorlds, 120);
+    });
+    $('#sort').addEventListener('change', renderWorlds); $('#refresh').addEventListener('click', () => { renderWorlds(); toast('Library refreshed'); });
+    document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active')); btn.classList.add('active'); currentFilter = btn.dataset.filter; renderWorlds(); }));
+    $('#nameForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = $('#nameInput').value.trim();
+      if (!name) return;
+      localStorage.setItem(nameStorageKey, name);
+      updateWelcome();
+      setOnboardingStep(2);
+      toast(`Nice to meet you, ${name}`);
+    });
+    $('#editName').addEventListener('click', openNameOnboarding);
+    document.querySelectorAll('.theme-swatch').forEach(button => button.addEventListener('click', () => saveTheme(themes[button.dataset.theme], button.dataset.theme)));
+    $('#customTheme').addEventListener('input', event => saveTheme(event.target.value, 'custom'));
+    $('#onboardingInfoBack').addEventListener('click', () => setOnboardingStep(1));
+    $('#onboardingContinue').addEventListener('click', () => setOnboardingStep(3));
+    $('#onboardingBack').addEventListener('click', () => setOnboardingStep(2));
+    $('#onboardingExplore').addEventListener('click', () => { completeOnboarding(); toast('Setup saved — explore your library when you’re ready'); });
+    $('#onboardingSkip').addEventListener('click', completeOnboarding);
+    $('#onboardingScan').addEventListener('click', scanFromOnboarding);
+    ['#settingsChooseFolder', '#automationChooseFolder', '#onboardingChooseFolder'].forEach(selector => $(selector).addEventListener('click', chooseFolder));
+    ['#settingsAutoLocate', '#automationAutoLocate', '#onboardingAutoLocate'].forEach(selector => $(selector).addEventListener('click', autoLocateFolder));
+    ['#watchToggle','#watchMain','#automationToggle','#watchSwitch'].forEach(s => $(s).addEventListener('click', async () => { const next = !watching; try { if (next) await invoke('start_watching',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'}); else await invoke('stop_watching'); setWatching(next); toast(next ? 'Watching for new screenshots' : 'Watcher paused'); } catch (error) { toast(`Watcher could not be changed: ${String(error)}`); } }));
+    $('#scan').addEventListener('click', async () => {
+      const button = $('#scan');
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Scanning…';
+      try {
+        const result = await invoke('organize_folder',{folderPath:$('#folderPath').textContent,dryRun:false,scanAllMonths:true,singleFolder:false,template:'{world}'});
+        if (result?.organized) toast(`${result.organized} screenshots organized`); else toast('Scan complete');
+        renderWorlds();
+      } catch (error) {
+        toast(`Scan could not be completed: ${String(error)}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Scan folder';
       }
     });
+    $('#simulate').addEventListener('click', async () => { try { const result = await invoke('simulate_folder',{folderPath:$('#folderPath').textContent,scanAllMonths:true,singleFolder:false,template:'{world}'}); const preview = result?.preview || []; $('#previewPanel').textContent = preview.length ? preview.join('\n\n') : 'No changes planned.'; $('#previewPanel').style.display = 'block'; toast(`Preview: ${result?.organized || 0} screenshots would be organized; no files changed`); } catch (error) { toast(`Preview could not be completed: ${String(error)}`); } });
+    $('#undo').addEventListener('click', async () => { try { const result = await invoke('undo_last_run',{folderPath:$('#folderPath').textContent}); toast(`${result?.undone || 0} files restored`); renderWorlds(); } catch (error) { toast(`Undo could not be completed: ${String(error)}`); } });
+    document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); $('#undo').click(); } if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); $('#search').focus(); } });
+    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); const state = await invoke('is_watching'); setWatching(Boolean(state)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); renderWorlds(); renderTimeline(); }
+    loadTheme();
+    updateWelcome();
+    setInterval(updateWelcome, 60000);
+    setInterval(() => { refreshVrChatStatus(); if (vrchatStartedAt) $('#vrchatDuration').textContent = `Open for ${formatDuration(Date.now() / 1000 - vrchatStartedAt)}`; }, 5000);
+    listen('watch-organized', () => { toast('New screenshot organized'); renderWorlds(); }); listen('watch-error', e => toast(e?.payload?.error || 'Watcher error')); boot();
   </script>
 </body>
 </html>

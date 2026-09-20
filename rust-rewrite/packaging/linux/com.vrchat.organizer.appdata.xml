@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.vrchat.organizer</id>
+  <name>VRChat Organizer</name>
+  <summary>Organize VRChat screenshots by world</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>VRChat Organizer Contributors</developer_name>
+  <url type="homepage">https://github.com/Seventh-Void/VRChat-Screenshot-Organizer</url>
+  <description>
+    <p>Sorts VRChat screenshots into world folders using metadata embedded by VRCX.</p>
+  </description>
+  <launchable type="desktop-id">com.vrchat.organizer.desktop</launchable>
+  <provides><binary>vrchat-organizer</binary></provides>
+  <categories><category>Graphics</category><category>Utility</category></categories>
+  <content_rating type="oars-1.1"/>
+</component>

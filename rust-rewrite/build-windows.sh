@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build VRChat Organizer for Windows (cross-compilation)
-# Requires: cargo, mingw-w64 toolchain, and Tauri dependencies
+# Builds the portable CLI on Linux. The Tauri GUI is built natively by CI.
 #
 # For a native Windows build, see BUILDING_WINDOWS.md
 
@@ -36,8 +36,8 @@ else
   echo "  1. Install Rust on Windows from https://rustup.rs"
   echo "  2. Clone this repo on Windows"
   echo "  3. Run: cargo build --release -p app"
-  echo "  4. The Tauri GUI binary will be at target/release/app.exe"
+  echo "  4. Build the GUI and installers on Windows with:"
+  echo "     cargo tauri build --bundles nsis,msi"
   echo ""
   echo "See BUILDING_WINDOWS.md for detailed instructions."
 fi
-

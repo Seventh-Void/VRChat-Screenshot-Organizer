@@ -2,7 +2,18 @@
 
 > Automatically organize your VRChat screenshots by world while maintaining your year/month folder structure
 
+The actively maintained desktop application is the Rust/Tauri implementation in
+[`rust-rewrite/`](./rust-rewrite/). It provides the Linux-first GUI, CLI,
+watch mode, undo support and AppImage packaging documented there.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Rust-2021-dea584?logo=rust)](https://www.rust-lang.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?logo=tauri)](https://v2.tauri.app/)
+[![Release](https://img.shields.io/github/v/release/Seventh-Void/VRChat-Screenshot-Organizer)](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases)
+
+> **Version 2.0** — the first public release of the Rust/Tauri desktop application.
+
+![VRChat Organizer library](./docs/screenshots/library.png)
 
 ## 🎯 Features
 
@@ -15,7 +26,7 @@
 - 🕵️ **Watch Mode** — Automatically organize new screenshots as they're taken using filesystem events + polling (Steam Proton/Wine compatible)
 - 📊 **Per-World Statistics** — Track how many photos per world are organized
 - ⚡ **Pure Rust** — Fast, memory-safe, no Python or external runtime required
-- 📦 **Standalone Binary** — Single executable Tauri AppImage, no dependencies at runtime
+- 📦 **Release-ready packaging** — AppImage for Linux plus portable and installer builds for Windows
 
 ## 📋 Requirements
 
@@ -60,7 +71,35 @@ This project has been developed with assistance from an AI coding tool. While th
 
 ### Download
 
-Grab the latest AppImage from the [releases page](https://github.com/yourusername/VRChat-Screenshot-Organizer/releases) or build from source.
+Grab the latest `VRChatOrganizer-2.0.0-x86_64.AppImage`, portable Windows executable,
+or Windows installer from the [releases page](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases).
+
+### Linux installation
+
+The AppImage contains the application and release assets. Install the Tauri
+Linux runtime libraries listed in the build requirements before launching it:
+
+```bash
+chmod +x VRChatOrganizer-2.0.0-x86_64.AppImage
+./VRChatOrganizer-2.0.0-x86_64.AppImage
+```
+
+On Debian/Ubuntu, the required WebKitGTK/GTK packages are the same packages
+listed in the CI workflow. Other distributions should install their equivalent
+WebKitGTK 4.1, GTK 3, libayatana-appindicator, librsvg, libsoup 3, and
+JavaScriptCore GTK packages.
+
+For desktop integration, copy the AppImage to a permanent location and use the
+desktop entry installed by your distribution's AppImage manager. The package
+contains the application icon, desktop entry, and AppStream metadata.
+
+### Windows installation
+
+Use the NSIS installer for a normal Start Menu installation, or download the
+portable `vrchat-organizer.exe` when you do not want to install anything. Windows
+10/11 includes WebView2 on supported systems; if the portable build reports a
+missing WebView2 runtime, install it from Microsoft's
+[WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
 
 ### Before You Start
 
@@ -72,10 +111,10 @@ Grab the latest AppImage from the [releases page](https://github.com/yourusernam
 
 ```bash
 # Make the AppImage executable
-chmod +x VRChatOrganizer-x86_64.AppImage
+chmod +x VRChatOrganizer-2.0.0-x86_64.AppImage
 
 # Launch the desktop app
-./VRChatOrganizer-x86_64.AppImage
+./VRChatOrganizer-2.0.0-x86_64.AppImage
 ```
 
 The GUI provides:
@@ -112,7 +151,7 @@ VRCHAT_SINGLE_FOLDER=1 ./target/release/desktop ~/Pictures/VRChat/Screenshots
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/VRChat-Screenshot-Organizer
+git clone https://github.com/Seventh-Void/VRChat-Screenshot-Organizer
 cd VRChat-Screenshot-Organizer/rust-rewrite
 
 # Build the desktop CLI tool
@@ -126,7 +165,15 @@ cargo build --release
 
 # Build the AppImage (requires appimagetool)
 ./build-appimage.sh
+
+# Build the Windows CLI from Linux (requires mingw-w64)
+# See BUILDING_WINDOWS.md for detailed instructions
+./build-windows.sh
 ```
+
+The full Windows GUI, portable executable, NSIS installer, and MSI are built on
+the Windows GitHub Actions runner. This is required because Tauri uses the
+native Windows WebView2 toolchain.
 
 ## 📖 Usage Guide
 
@@ -246,11 +293,11 @@ The **Watch** feature uses a combination of OS filesystem events (`inotify` on L
 - Verify VRCX is running and Screenshot Metadata is enabled (see above)
 - Some old screenshots taken before VRCX setup won't have metadata embedded
 - These images will remain in the month folder root
-- Use `debug_metadata.py` (from the original Python tools in `docs/`) to inspect a specific image
+- To inspect an image's metadata manually, use: `exiftool screenshot.png` or `pngcheck -7 screenshot.png`
 
 ### Permission denied errors
 - Ensure you have read/write permissions on the VRChat pictures directory
-- Make the AppImage executable: `chmod +x VRChatOrganizer-x86_64.AppImage`
+- Make the AppImage executable: `chmod +x VRChatOrganizer-2.0.0-x86_64.AppImage`
 
 ### Tauri GUI shows a blank/black window
 - Ensure WebKit2GTK is installed on your system (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
@@ -284,11 +331,6 @@ VRChat-Screenshot-Organizer/
 │   │   └── capabilities/
 │   │       └── default.json
 │   └── README.md                    # Rust-specific details
-├── docs/                            # Documentation (original Python docs)
-│   ├── ADVANCED.md
-│   ├── FAQ.md
-│   ├── INSTALLATION.md
-│   └── PROJECT_STRUCTURE.md
 ├── icons/                           # Application icons
 │   └── 256x256/
 │       └── apps/
@@ -296,7 +338,6 @@ VRChat-Screenshot-Organizer/
 ├── README.md                        # This file
 ├── CONTRIBUTING.md
 ├── LICENSE                          # MIT License
-└── TODO.md
 ```
 
 ## 🔧 Technical Details
@@ -361,7 +402,16 @@ This tool modifies your file system by moving your screenshot files. **Use at yo
 
 For issues, questions, or suggestions:
 - Open an [issue](../../issues) on GitHub
-- Check existing documentation in the [docs](docs/) folder
+
+- **The AppImage does not start:** make it executable with `chmod +x`, then run
+  it from a terminal to see diagnostics. On older distributions, update the
+  graphics/WebKit packages or use the portable Windows build.
+- **Windows shows a WebView2 error:** install or repair the Evergreen WebView2
+  Runtime, then restart the application.
+- **No world metadata is found:** VRCX must be running while screenshots are
+  taken, and its Screenshot Metadata option must be enabled.
+- **Permission denied:** choose a folder you can write to and keep a backup
+  before organizing. Use Dry Run before the first real operation.
 
 ---
 
