@@ -8,7 +8,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "=== Building VRChat Organizer full release (AppImage + Windows EXE) ==="
+echo "=== Building VRChat Organizer AppImage ==="
 command -v cargo >/dev/null || { echo "cargo is required" >&2; exit 1; }
 command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
 
@@ -77,18 +77,11 @@ else
   exit 1
 fi
 
-# A release is not complete until both desktop artifacts have been rebuilt.
-echo ">>> Building Windows CLI executable..."
-./build-windows.sh
-
 test -s "${RELEASE_DIR}/${APPIMAGE_NAME}" || {
   echo "AppImage build did not produce ${RELEASE_DIR}/${APPIMAGE_NAME}" >&2
   exit 1
 }
-test -s "${RELEASE_DIR}/VRChatOrganizer-${VERSION}-windows-x86_64.exe" || {
-  echo "Windows build did not produce the expected executable" >&2
-  exit 1
-}
+sha256sum "${RELEASE_DIR}/${APPIMAGE_NAME}" > "${RELEASE_DIR}/SHA256SUMS"
 
 echo "=== Build complete ==="
 echo ""

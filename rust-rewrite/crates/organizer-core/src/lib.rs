@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
+use chrono::TimeZone;
 use fast_image_resize::{images::Image as ResizeImage, pixels::PixelType, Resizer};
 use flate2::read::ZlibDecoder;
 use rayon::prelude::*;
 use regex::Regex;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -308,6 +309,26 @@ pub fn tag_photo_participant_in_store(
 
 fn ensure_cache_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cache_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )?;
+    let schema_version = connection
+        .query_row(
+            "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if schema_version.as_deref() != Some("2") {
+        connection.execute_batch("DROP TABLE IF EXISTS photos;")?;
+        connection.execute(
+            "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('schema_version', '2')",
+            [],
+        )?;
+    }
+    connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS photos (
             path TEXT PRIMARY KEY,
             size_bytes INTEGER NOT NULL,
@@ -541,7 +562,7 @@ fn scan_library_partition_with_options(
             .filter_map(|item| item.ok())
             .filter(|item| item.file_type().is_file())
             .filter(|item| is_image_path(item.path()))
-            .filter(|item| !is_ignored_path(item.path()))
+            .filter(|item| !is_ignored_path(item.path(), base_path))
         {
             let path = item.path().to_path_buf();
             let metadata = item.metadata()?;
@@ -795,8 +816,9 @@ fn is_image_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_ignored_path(path: &Path) -> bool {
-    path.components().any(|component| {
+fn is_ignored_path(path: &Path, base_path: &Path) -> bool {
+    let relative = path.strip_prefix(base_path).unwrap_or(path);
+    relative.components().any(|component| {
         let name = component.as_os_str().to_string_lossy();
         name == "Prints" || name == "vrchat-organizer-thumbnails" || name.starts_with('.')
     })
@@ -1027,7 +1049,7 @@ pub fn is_already_organized(file_path: &Path, config: &OrganizerConfig) -> bool 
 pub fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
     match fs::rename(src, dst) {
         Ok(()) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(17) => {
+        Err(e) if e.raw_os_error() == Some(18) => {
             // EXDEV: copy to a same-directory temporary file first so an
             // interrupted copy never leaves a partial destination.
             let parent = dst
@@ -1642,7 +1664,11 @@ fn extract_capture_timestamp(filename: &str) -> Option<u64> {
     let second = captures.get(4)?.as_str().parse::<u32>().ok()?;
     let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
     let datetime = date.and_hms_opt(hour, minute, second)?;
-    datetime.and_utc().timestamp().try_into().ok()
+    chrono::Local
+        .from_local_datetime(&datetime)
+        .single()
+        .map(|value| value.timestamp())
+        .and_then(|value| value.try_into().ok())
 }
 
 fn determine_month_folder(file_path: &Path, config: &OrganizerConfig) -> PathBuf {
@@ -1751,7 +1777,7 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
             let entry = entry?;
             if entry.file_type()?.is_file()
                 && is_image_path(&entry.path())
-                && !is_ignored_path(&entry.path())
+                && !is_ignored_path(&entry.path(), &config.base_path)
             {
                 root_files.push(entry.path());
             }
@@ -1933,13 +1959,6 @@ fn organize_single_file_unlocked(
                 .and_then(|p| p.canonicalize().ok())
                 .unwrap_or_else(|| destination.parent().unwrap_or(Path::new("")).to_path_buf());
             let dest_full = dest_parent.join(destination.file_name().unwrap_or_default());
-            log_undo_entry(
-                config.base_path.as_path(),
-                &UndoEntry {
-                    original_path: original_full.to_string_lossy().to_string(),
-                    destination_path: dest_full.to_string_lossy().to_string(),
-                },
-            )?;
             // Move with cross-device (EXDEV) fallback; propagate errors so the
             // stats aren't inflated for moves that never happened.
             move_file(file_path, &destination).with_context(|| {
@@ -1949,6 +1968,13 @@ fn organize_single_file_unlocked(
                     destination.display()
                 )
             })?;
+            log_undo_entry(
+                config.base_path.as_path(),
+                &UndoEntry {
+                    original_path: original_full.to_string_lossy().to_string(),
+                    destination_path: dest_full.to_string_lossy().to_string(),
+                },
+            )?;
             println!("moved {} -> {}", file_path.display(), destination.display());
         }
         stats.organized += 1;
@@ -1990,7 +2016,7 @@ fn process_folder(
         };
         if entry.file_type().is_file() {
             let path = entry.into_path();
-            if is_image_path(&path) && !is_ignored_path(&path) {
+            if is_image_path(&path) && !is_ignored_path(&path, &config.base_path) {
                 image_files.push(path);
             }
         }
@@ -2290,15 +2316,22 @@ mod tests {
 
     #[test]
     fn ignores_generated_thumbnail_cache() {
-        assert!(is_ignored_path(Path::new(
-            "/tmp/vrchat/vrchat-organizer-thumbnails/cover.jpg"
-        )));
-        assert!(is_ignored_path(Path::new(
-            "/tmp/vrchat/2025-01/Prints/cover.png"
-        )));
-        assert!(!is_ignored_path(Path::new(
-            "/tmp/vrchat/2025-01/Black Cat/cover.png"
-        )));
+        assert!(is_ignored_path(
+            Path::new("/tmp/vrchat/vrchat-organizer-thumbnails/cover.jpg"),
+            Path::new("/tmp/vrchat")
+        ));
+        assert!(is_ignored_path(
+            Path::new("/tmp/vrchat/2025-01/Prints/cover.png"),
+            Path::new("/tmp/vrchat")
+        ));
+        assert!(!is_ignored_path(
+            Path::new("/tmp/vrchat/2025-01/Black Cat/cover.png"),
+            Path::new("/tmp/vrchat")
+        ));
+        assert!(!is_ignored_path(
+            Path::new("/home/user/.local/share/Steam/Pictures/VRChat/cover.png"),
+            Path::new("/home/user/.local/share/Steam/Pictures/VRChat")
+        ));
     }
 
     #[test]

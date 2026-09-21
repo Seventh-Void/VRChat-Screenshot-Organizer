@@ -34,7 +34,7 @@ control tied to the VRChat process.
 
 | File | Platform | SHA-256 |
 |---|---|---|
-| `VRChatOrganizer-2.1.0-x86_64.AppImage` | Linux x86_64 GUI | `9e51dece12bc7318f3fb20e7f73cbc0173966aa06239415f090fd1bd62dda088` |
+| `VRChatOrganizer-2.1.0-x86_64.AppImage` | Linux x86_64 GUI | `bbc8874cb52abf9095cb22a3c8483c60cda7c3bd1dd20572173aac5ff197d598` |
 | `VRChatOrganizer-2.1.0-windows-x86_64.exe` | Windows x86_64 CLI | `15fae9e09867fafe9888ea1c36c65c6a12e97eb0068fd3e28c46fb88db74edc4` |
 
 The Windows executable in this release directory is the standalone CLI build.

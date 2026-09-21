@@ -52,7 +52,7 @@ async fn organize_folder(
     template: String,
 ) -> Result<OrganizerStats, String> {
     clear_cancel_request();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         organize_folder_blocking(
             folder_path,
             dry_run,
@@ -62,7 +62,9 @@ async fn organize_folder(
         )
     })
     .await
-    .map_err(|err| format!("scan task failed: {err}"))?
+    .map_err(|err| format!("scan task failed: {err}"))?;
+    clear_cancel_request();
+    result
 }
 
 #[tauri::command]
@@ -115,10 +117,12 @@ async fn get_library(
                 Some(&background_cache),
             ) {
                 Ok(stats) => {
+                    clear_cancel_request();
                     let _ = background_app.emit("library-updated", stats);
                 }
 
                 Err(error) => {
+                    clear_cancel_request();
                     let _ = background_app.emit(
                         "library-error",
                         serde_json::json!({ "error": error.to_string() }),
@@ -134,9 +138,11 @@ async fn get_library(
     tauri::async_runtime::spawn_blocking(move || {
         match scan_library_with_cache(&background_path, scan_all_months, Some(&background_cache)) {
             Ok(stats) => {
+                clear_cancel_request();
                 let _ = background_app.emit("library-updated", stats);
             }
             Err(error) => {
+                clear_cancel_request();
                 let _ = background_app.emit(
                     "library-error",
                     serde_json::json!({ "error": error.to_string() }),
@@ -431,7 +437,11 @@ fn has_undo(folder_path: String) -> bool {
     undo_path.exists()
 }
 
-fn collect_watch_paths(event: &Event, pending: &mut std::collections::HashSet<PathBuf>) {
+fn collect_watch_paths(
+    event: &Event,
+    base_path: &Path,
+    pending: &mut std::collections::HashSet<PathBuf>,
+) {
     if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
         return;
     }
@@ -442,10 +452,16 @@ fn collect_watch_paths(event: &Event, pending: &mut std::collections::HashSet<Pa
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase());
         if !matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg" | "webp"))
-            || path.components().any(|component| {
-                let name = component.as_os_str().to_string_lossy();
-                name == "Prints" || name == "vrchat-organizer-thumbnails" || name.starts_with('.')
-            })
+            || path
+                .strip_prefix(base_path)
+                .unwrap_or(path)
+                .components()
+                .any(|component| {
+                    let name = component.as_os_str().to_string_lossy();
+                    name == "Prints"
+                        || name == "vrchat-organizer-thumbnails"
+                        || name.starts_with('.')
+                })
         {
             continue;
         }
@@ -590,11 +606,13 @@ async fn start_watching(
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(event)) => {
                     let mut pending = std::collections::HashSet::new();
-                    collect_watch_paths(&event, &mut pending);
+                    collect_watch_paths(&event, &watch_path_clone, &mut pending);
                     let deadline = Instant::now() + Duration::from_millis(700);
                     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
                         match rx.recv_timeout(remaining) {
-                            Ok(Ok(next)) => collect_watch_paths(&next, &mut pending),
+                            Ok(Ok(next)) => {
+                                collect_watch_paths(&next, &watch_path_clone, &mut pending)
+                            }
                             Ok(Err(error)) => {
                                 let _ = app_handle.emit(
                                     "watch-error",

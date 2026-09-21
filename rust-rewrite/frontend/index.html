@@ -312,7 +312,10 @@
     .tag-menu input:focus { border-color:var(--accent); }
     .tag-suggestions { display:grid; gap:3px; max-height:150px; overflow:auto; margin:7px 0; }
     .tag-suggestion { border:0; border-radius:5px; background:transparent; color:var(--muted); padding:6px 7px; text-align:left; cursor:pointer; }
-    .tag-suggestion:hover, .tag-suggestion:focus-visible { background:var(--accent-soft); color:var(--ink); outline:none; }
+    .tag-suggestion:hover, .tag-suggestion:focus-visible, .tag-suggestion.active { background:var(--accent-soft); color:var(--ink); outline:none; }
+    .tag-selected { display:flex; flex-wrap:wrap; gap:5px; margin:6px 0; }
+    .tag-chip { display:inline-flex; align-items:center; gap:4px; color:var(--ink); background:var(--accent-soft); border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:10px; }
+    .tag-chip button, .tag-remove { border:0; background:transparent; color:var(--muted); cursor:pointer; padding:0 2px; }
     .tag-menu-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
     .lightbox-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .lightbox-nav { position:absolute; inset:0; display:flex; align-items:center; justify-content:space-between; pointer-events:none; padding:0 8px; }
@@ -790,7 +793,8 @@
       if (sessionStarted && vrchatWasRunning !== true) setLibraryTab('session');
       vrchatWasRunning = vrchatRunning;
       if (statusChanged && libraryTab === 'session') renderWorlds();
-      syncWatcherToVrChat(vrchatRunning);
+      // Watching is an explicit user-controlled setting; VRChat status must
+      // not start or stop it behind the user's back.
     }
     async function syncWatcherToVrChat(vrchatRunning) {
       if (vrchatWatcherSyncInFlight) return vrchatWatcherSyncInFlight;
@@ -1152,15 +1156,15 @@
       $('#peopleSuggestions').innerHTML = '';
     }
     function renderPeopleSuggestions() {
-      const query = ($('#peopleSearch').value || '').trim().toLowerCase();
+      const query = ($('#peopleSearch').value || '').trim().normalize('NFC').toLocaleLowerCase();
       $('#peopleResults').innerHTML = '';
       if (!query) {
         $('#peopleSuggestions').innerHTML = '';
         return;
       }
       const names = [...knownPeopleIndex.values()].sort((a, b) => a.name.localeCompare(b.name));
-      const matches = names.filter(person => person.name.toLowerCase().startsWith(query));
-      const suggestions = (matches.length ? matches : names.filter(person => person.name.toLowerCase().includes(query))).slice(0, 10);
+      const matches = names.filter(person => VRChatTagging.normalizeName(person.name).startsWith(query));
+      const suggestions = (matches.length ? matches : names.filter(person => VRChatTagging.normalizeName(person.name).includes(query))).slice(0, 10);
       $('#peopleSuggestions').innerHTML = suggestions.map(person => `<button class="people-suggestion" type="button" data-person-suggestion="${escapeHtml(person.name)}">${escapeHtml(person.name)} <small>${escapeHtml([...person.sources].join(' · '))}</small></button>`).join('');
     }
     function renderPeoplePerson(person) {
@@ -1190,13 +1194,11 @@
         loadMore.hidden = end >= person.photos.length;
         loadMore.textContent = `Load more (${person.photos.length - end} remaining)`;
       }
-      document.querySelectorAll('[data-person-photo]').forEach(tile => tile.addEventListener('click', () => {
+      document.querySelectorAll('[data-person-photo]').forEach(tile => {
         if (tile.dataset.peopleBound) return;
         tile.dataset.peopleBound = 'true';
-        tile.addEventListener('click', () => {
-          openViewer({ name: person.name, photos: person.photos }, Number(tile.dataset.personPhoto));
-        });
-      }));
+        tile.addEventListener('click', () => openViewer({ name: person.name, photos: person.photos }, Number(tile.dataset.personPhoto)));
+      });
     }
     function renderPeopleResultShell() {
       if (!peopleResultState) return;
@@ -1205,12 +1207,12 @@
       renderPeopleResultChunk();
     }
     function renderPeopleExact() {
-      const query = ($('#peopleSearch').value || '').trim().toLowerCase();
+      const query = ($('#peopleSearch').value || '').trim().normalize('NFC').toLocaleLowerCase();
       if (!query) {
         clearPeopleResults();
         return;
       }
-      renderPeoplePerson(peopleIndex.get(query));
+      renderPeoplePerson(peopleIndex.get(VRChatTagging.normalizeName(query)));
     }
     function resetPeopleSearch() {
       clearTimeout(peopleSearchTimer);
@@ -1404,7 +1406,7 @@
       wrapper.style.height = `${Math.max(1, Math.round(image.naturalHeight * scale))}px`;
     }
     function renderTagSuggestions() {
-      const query = ($('#tagPersonSearch').value || '').trim().toLowerCase();
+      const query = ($('#tagPersonSearch').value || '').trim().normalize('NFC').toLocaleLowerCase();
       const photo = viewerState?.photos?.[viewerState.index];
       const names = [...new Map(
         (Array.isArray(photo?.participants) ? photo.participants : [])
@@ -1432,7 +1434,10 @@
       menu.style.top = `${Math.max(12, top)}px`;
       $('#tagPersonSearch').value = '';
       tagDialogState = VRChatTagging.createTagDialogController(
-        [...new Set((viewerState.photos[viewerState.index].participants || []).map(name => String(name).trim()).filter(Boolean))]
+        [...new Set([
+          ...(viewerState.photos[viewerState.index].participants || []),
+          ...(viewerState.photos[viewerState.index].taggedParticipants || [])
+        ].map(name => String(name).trim()).filter(Boolean))]
           .sort((a, b) => a.localeCompare(b))
       );
       renderTagSuggestions();
@@ -1607,7 +1612,7 @@
       fitViewerImage();
       $('#lightboxImageWrap').style.transform = 'none';
     });
-    document.addEventListener('keydown', async event => { if (!viewerState) return; if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && tagUndoState) { event.preventDefault(); await undoTagChange(); return; } if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape' && !$('#tagMenu').hidden) { closeTagMenu(); return; } if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
+    document.addEventListener('keydown', async event => { if (!viewerState) return; const editing = event.target?.matches?.('input, textarea, select, [contenteditable="true"]'); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && tagUndoState && !editing) { event.preventDefault(); await undoTagChange(); return; } if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault(); if (event.key === 'Escape' && !$('#tagMenu').hidden) { closeTagMenu(); return; } if (event.key === 'Escape') closeViewer(); if (event.key === 'ArrowLeft') moveViewer(-1); if (event.key === 'ArrowRight') moveViewer(1); });
     function setWatching(next) { watching = next; $('#watchPulse').classList.toggle('live', watching); $('#watchLabel').textContent = watching ? 'Watcher is live' : 'Watcher paused'; $('#watchCopy').textContent = watching ? 'New captures will be organized automatically.' : 'New screenshots are waiting for you.'; $('#watchToggle').textContent = watching ? 'Pause watching →' : 'Start watching →'; $('#watchMain').textContent = watching ? 'Watching now' : 'Start watching'; $('#automationToggle').textContent = watching ? 'Pause watching' : 'Start watching'; $('#automationStatus').textContent = watching ? 'Watcher is active.' : 'Watcher is paused.'; $('#watchSwitch').classList.toggle('on', watching); }
     document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => { selectNavigation(btn.dataset.view); const view = btn.dataset.view; if (view !== 'people') resetPeopleSearch(); document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === view)); $('#crumbTitle').textContent = btn.querySelector('span:nth-child(2)').textContent; $('.content').scrollTop = 0; if (view === 'timeline') renderTimeline(); if (view === 'collections') renderCollections(); if (view === 'storage') renderStorage(); if (view === 'activity') refreshActivity(); }));
     let searchRenderTimer;
@@ -1632,7 +1637,7 @@
     $('#peopleSuggestions').addEventListener('click', event => {
       const button = event.target.closest('[data-person-suggestion]');
       if (!button) return;
-      const person = peopleIndex.get(button.dataset.personSuggestion.toLowerCase());
+      const person = knownPeopleIndex.get(VRChatTagging.normalizeName(button.dataset.personSuggestion));
       $('#peopleSearch').value = person?.name || button.dataset.personSuggestion;
       renderPeoplePerson(person);
     });
@@ -1767,8 +1772,8 @@
       terminalHasHistory = false;
       $('#activityTerminalOutput').innerHTML = '<span class="activity-terminal-line"><span class="terminal-time">--:--:--</span> <span class="terminal-level">INFO</span> Terminal cleared.</span>';
     });
-    document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); $('#undo').click(); } if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); $('#search').focus(); } });
-    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); setScanAllMonths(scanAllMonthsEnabled()); const state = await invoke('is_watching'); setWatching(Boolean(state)); await listen('library-updated', event => { $('#worldGrid').classList.add('refreshing'); applyLibrarySnapshot(event.payload); renderWorlds(); renderTimeline(); renderStorage(); refreshPeopleIndex(); requestAnimationFrame(() => $('#worldGrid').classList.remove('refreshing')); }); await listen('library-error', event => toast(`Background library scan failed: ${String(event.payload?.error || event.payload)}`)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); await refreshLibrary(); }
+    document.addEventListener('keydown', (event) => { const target = event.target; const editing = target?.matches?.('input, textarea, select, [contenteditable="true"]'); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !editing && !viewerState) { event.preventDefault(); $('#undo').click(); } if (event.key === '/' && !editing) { event.preventDefault(); $('#search').focus(); } });
+    async function boot() { try { const savedPath = localStorage.getItem(folderStorageKey); const path = savedPath || await invoke('get_default_path'); setFolderPath(path); setScanAllMonths(scanAllMonthsEnabled()); const state = await invoke('is_watching'); setWatching(Boolean(state)); await listen('library-updated', event => { $('#worldGrid').classList.add('refreshing'); applyLibrarySnapshot(event.payload); renderWorlds(); renderTimeline(); renderStorage(); rebuildPeopleIndex(); requestAnimationFrame(() => $('#worldGrid').classList.remove('refreshing')); }); await listen('library-error', event => toast(`Background library scan failed: ${String(event.payload?.error || event.payload)}`)); } catch (error) { toast(`Could not read library path: ${String(error)}`); } updateWelcome(); refreshVrChatStatus(); if (!localStorage.getItem(onboardingStorageKey)) openNameOnboarding(); await refreshLibrary(); }
     loadTheme();
     updateWelcome();
     setInterval(updateWelcome, 60000);
