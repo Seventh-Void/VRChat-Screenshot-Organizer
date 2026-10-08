@@ -1,10 +1,10 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use organizer_core::{
     avatar_people, avatar_person_photos, cached_library, clear_cancel_request,
-    delete_positional_person_tag, extract_image_meta, generate_thumbnail, is_ignored_path,
-    is_image_path, organize_path, organize_single_file, positional_person_tags, read_activity_log,
-    request_cancel, sanitize_name, save_positional_person_tag, scan_library_with_cache,
-    set_photo_tags, tag_photo_participant_in_store, undo_organization,
+    delete_positional_person_tag, extract_image_meta, generate_thumbnail, hold_organization_lock,
+    is_ignored_path, is_image_path, organize_path, organize_single_file, positional_person_tags,
+    read_activity_log, request_cancel, sanitize_name, save_positional_person_tag,
+    scan_library_with_cache, set_photo_tags, tag_photo_participant_in_store, undo_organization,
     update_positional_person_tag, validate_template, ActivityEntry, AvatarPerson,
     AvatarPersonPhoto, OrganizerConfig, OrganizerStats,
 };
@@ -72,6 +72,30 @@ fn library_root(app: &AppHandle) -> Result<(String, PathBuf), String> {
         .ok_or_else(|| "no screenshot folder selected".to_string())
 }
 
+/// The folder template every UI passes; both editions must organize identically.
+const STANDARD_TEMPLATE: &str = "{world}";
+
+fn engine_config(
+    base_path: PathBuf,
+    dry_run: bool,
+    scan_all_months: bool,
+    single_folder: bool,
+    template: &str,
+) -> Result<OrganizerConfig, String> {
+    let template = match template.trim() {
+        "" => STANDARD_TEMPLATE.to_string(),
+        trimmed => trimmed.to_string(),
+    };
+    validate_template(&template).map_err(|err| err.to_string())?;
+    Ok(OrganizerConfig {
+        base_path,
+        dry_run,
+        scan_all_months,
+        single_folder,
+        template,
+    })
+}
+
 fn root_folder(app: &AppHandle) -> Result<String, String> {
     library_root(app).map(|(folder, _)| folder)
 }
@@ -97,6 +121,48 @@ fn root_file(app: &AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|path| path.join("library-root.txt"))
         .map_err(|error| format!("could not locate app data directory: {error}"))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LiteSettings {
+    pub watch: bool,
+    pub start_in_tray: bool,
+    pub scan_all_months: bool,
+}
+
+fn lite_settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("lite-settings.json"))
+        .map_err(|error| format!("could not locate app data directory: {error}"))
+}
+
+/// A damaged or unreadable file means defaults, never a failed start.
+fn load_lite_settings(file: &Path) -> LiteSettings {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_lite_settings(file: &Path, settings: &LiteSettings) -> Result<(), String> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create settings folder: {error}"))?;
+    }
+    let json = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    std::fs::write(file, json).map_err(|error| format!("could not save Lite settings: {error}"))
+}
+
+#[tauri::command(async)]
+fn get_lite_settings(app: AppHandle) -> Result<LiteSettings, String> {
+    Ok(load_lite_settings(&lite_settings_file(&app)?))
+}
+
+#[tauri::command(async)]
+fn set_lite_settings(app: AppHandle, settings: LiteSettings) -> Result<(), String> {
+    save_lite_settings(&lite_settings_file(&app)?, &settings)
 }
 
 /// Saves the approved root. `first_only` uses create_new, so a legacy adoption
@@ -144,16 +210,28 @@ fn select_root(app: &AppHandle, folder: &str, first_only: bool) -> Result<String
     activate_root(app, root)
 }
 
-/// Activates the saved library root, if any.
-#[tauri::command(async)]
-fn get_library_root(app: AppHandle) -> Result<Option<String>, String> {
-    let saved = match std::fs::read_to_string(root_file(&app)?) {
+/// The saved library root, approved again (it may have been deleted or unmounted).
+fn read_saved_root(file: &Path, home: Option<&Path>) -> Result<Option<(String, PathBuf)>, String> {
+    let saved = match std::fs::read_to_string(file) {
         Ok(saved) => saved,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("could not read saved screenshot folder: {error}")),
     };
-    let root = approve_root(&saved, app.path().home_dir().ok().as_deref())?;
-    activate_root(&app, root).map(Some)
+    approve_root(&saved, home).map(Some)
+}
+
+/// Activates the saved library root, if any. Lite calls this at launch because a
+/// start-in-tray launch has no page to call `get_library_root`.
+fn restore_saved_root(app: &AppHandle) -> Result<Option<String>, String> {
+    match read_saved_root(&root_file(app)?, app.path().home_dir().ok().as_deref())? {
+        Some(root) => activate_root(app, root).map(Some),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command(async)]
+fn get_library_root(app: AppHandle) -> Result<Option<String>, String> {
+    restore_saved_root(&app)
 }
 
 /// Native folder picker; the chosen folder becomes the library root.
@@ -250,19 +328,13 @@ fn organize_folder_blocking(
     template: String,
 ) -> Result<OrganizerStats, String> {
     let expanded = shellexpand::tilde(&folder_path).to_string();
-    let template = if template.trim().is_empty() {
-        "{world}".to_string()
-    } else {
-        template.trim().to_string()
-    };
-    validate_template(&template).map_err(|err| err.to_string())?;
-    let config = OrganizerConfig {
-        base_path: PathBuf::from(expanded.clone()),
+    let config = engine_config(
+        PathBuf::from(expanded),
         dry_run,
         scan_all_months,
         single_folder,
-        template,
-    };
+        &template,
+    )?;
 
     let mut stats = OrganizerStats::default();
     organize_path(&config, &mut stats).map_err(|err| err.to_string())?;
@@ -803,33 +875,42 @@ async fn start_watching(
     scan_all_months: bool,
     single_folder: bool,
     template: String,
-    state: State<'_, WatcherState>,
 ) -> Result<String, String> {
-    let expanded = shellexpand::tilde(&root_folder(&app)?).to_string();
+    begin_watching(&app, dry_run, scan_all_months, single_folder, &template)
+}
+
+/// Starts the watcher thread. Used by the command and by Lite at launch,
+/// when there may be no webview at all.
+fn begin_watching(
+    app: &AppHandle,
+    dry_run: bool,
+    scan_all_months: bool,
+    single_folder: bool,
+    template: &str,
+) -> Result<String, String> {
+    let state = app.state::<WatcherState>();
+    let state = state.inner();
+    let expanded = shellexpand::tilde(&root_folder(app)?).to_string();
     let base_path = PathBuf::from(expanded.clone());
 
     if !base_path.exists() {
         return Err(format!("path does not exist: {}", expanded));
     }
 
-    let config = OrganizerConfig {
-        base_path: base_path.clone(),
+    let config = engine_config(
+        base_path.clone(),
         dry_run,
         scan_all_months,
         single_folder,
-        template: if template.trim().is_empty() {
-            "{world}".to_string()
-        } else {
-            template.trim().to_string()
-        },
-    };
-    validate_template(&config.template).map_err(|err| err.to_string())?;
+        template,
+    )?;
 
     let watch_path = base_path.clone();
     if state.running.swap(true, Ordering::SeqCst) {
         return Err("already watching".to_string());
     }
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    sync_tray_watch(app, true);
     let _ = app.emit(
         "watch-status",
         serde_json::json!({
@@ -857,6 +938,7 @@ async fn start_watching(
                     .state::<WatcherState>()
                     .running
                     .store(false, Ordering::SeqCst);
+                sync_tray_watch(&app_handle, false);
                 let _ = app_handle.emit("watch-status", serde_json::json!({"status": "stopped"}));
             }
         };
@@ -975,14 +1057,197 @@ async fn start_watching(
 
 /// Stop watching the folder.
 #[tauri::command]
-fn stop_watching(app: AppHandle, state: State<'_, WatcherState>) -> Result<String, String> {
-    // Retire the thread first so a start racing this stop gets a fresh generation.
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    state.running.store(false, Ordering::SeqCst);
-
-    let _ = app.emit("watch-status", serde_json::json!({"status": "stopped"}));
-
+fn stop_watching(app: AppHandle) -> Result<String, String> {
+    end_watching(&app);
     Ok("stopped".to_string())
+}
+
+/// Retire the watcher thread. Shared by the command and the Lite tray.
+fn end_watching(app: &AppHandle) {
+    let state = app.state::<WatcherState>();
+    // Retire the thread first so a start racing this stop gets a fresh generation.
+    state.inner().generation.fetch_add(1, Ordering::SeqCst);
+    state.inner().running.store(false, Ordering::SeqCst);
+    sync_tray_watch(app, false);
+    let _ = app.emit("watch-status", serde_json::json!({"status": "stopped"}));
+}
+
+/// Tray menu label after "Organize now": with the window closed (and no tray
+/// tooltips on Linux) the menu is the only place the result can show.
+fn organize_result_label(result: &Result<OrganizerStats, String>) -> String {
+    match result {
+        Ok(stats) => format!("Organize now (last run: {} moved)", stats.organized),
+        Err(_) => "Organize now (last run failed)".to_string(),
+    }
+}
+
+/// Tray "Organize now": the same engine call the UI makes, run in the background.
+fn organize_now(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = root_folder(&app).and_then(|folder| {
+            let settings = lite_settings_file(&app)
+                .map(|file| load_lite_settings(&file))
+                .unwrap_or_default();
+            clear_cancel_request();
+            organize_folder_blocking(
+                folder,
+                false,
+                settings.scan_all_months,
+                false,
+                STANDARD_TEMPLATE.to_string(),
+            )
+        });
+        let item = app
+            .state::<LiteRuntime>()
+            .inner()
+            .organize_item
+            .lock()
+            .unwrap()
+            .clone();
+        if let Some(item) = item {
+            let _ = item.set_text(organize_result_label(&result));
+        }
+        let payload = match result {
+            Ok(stats) => serde_json::json!({ "stats": stats }),
+            Err(error) => serde_json::json!({ "error": error }),
+        };
+        let _ = app.emit("lite-organize", payload);
+    });
+}
+
+#[derive(Default)]
+struct LiteRuntime {
+    tray: Mutex<Option<tauri::tray::TrayIcon>>,
+    watch_item: Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
+    organize_item: Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+}
+
+fn should_open_window(start_in_tray: bool, tray_available: bool) -> bool {
+    !(start_in_tray && tray_available)
+}
+
+/// Mirrors whether the watcher runs. No-op in Full (no tray). The item is cloned
+/// out first: `set_checked` waits on the main thread, which may want this lock.
+fn sync_tray_watch(app: &AppHandle, on: bool) {
+    let item = app
+        .state::<LiteRuntime>()
+        .inner()
+        .watch_item
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some(item) = item {
+        let _ = item.set_checked(on);
+    }
+}
+
+/// Tray "Watcher mode": flips the saved setting and starts/stops the shared watcher.
+fn toggle_watcher_from_tray(app: &AppHandle) {
+    let Ok(file) = lite_settings_file(app) else {
+        return;
+    };
+    let mut settings = load_lite_settings(&file);
+    // Flip what the user sees (the watcher's real state), and save before
+    // starting/stopping so the window's watch-status refresh reads the new value.
+    settings.watch = !app
+        .state::<WatcherState>()
+        .inner()
+        .running
+        .load(Ordering::SeqCst);
+    let _ = save_lite_settings(&file, &settings);
+    if !settings.watch {
+        end_watching(app);
+    } else if let Err(error) = begin_watching(
+        app,
+        false,
+        settings.scan_all_months,
+        false,
+        STANDARD_TEMPLATE,
+    ) {
+        settings.watch = false;
+        let _ = save_lite_settings(&file, &settings);
+        let _ = app.emit("watch-error", serde_json::json!({ "error": error }));
+    }
+}
+
+fn build_tray(app: &AppHandle) -> Result<tauri::tray::TrayIcon, String> {
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    let item = |id: &str, label: &str| {
+        MenuItem::with_id(app, id, label, true, None::<&str>).map_err(|error| error.to_string())
+    };
+    let (open, organize, quit) = (
+        item("open", "Open")?,
+        item("organize", "Organize now")?,
+        item("quit", "Quit")?,
+    );
+    let watching = app
+        .state::<WatcherState>()
+        .inner()
+        .running
+        .load(Ordering::SeqCst);
+    let watch = CheckMenuItem::with_id(app, "watch", "Watcher mode", true, watching, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let menu = Menu::with_items(app, &[&open, &watch, &organize, &quit])
+        .map_err(|error| error.to_string())?;
+    *app.state::<LiteRuntime>()
+        .inner()
+        .watch_item
+        .lock()
+        .unwrap() = Some(watch);
+    *app.state::<LiteRuntime>()
+        .inner()
+        .organize_item
+        .lock()
+        .unwrap() = Some(organize.clone());
+    let icon = app.default_window_icon().cloned().ok_or("no app icon")?;
+    let builder = TrayIconBuilder::with_id("lite")
+        .icon(icon)
+        .tooltip("VRChat Organizer Lite")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                let _ = open_main_window(app, Edition::Lite);
+            }
+            "watch" => toggle_watcher_from_tray(app),
+            "organize" => organize_now(app),
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    // ponytail: Linux loads the tray library at runtime and can panic when it is
+    // missing; treat that as "no tray". Upgrade path: probe the library first.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build(app)))
+        .map_err(|_| "system tray unavailable".to_string())?
+        .map_err(|error| error.to_string())
+}
+
+fn setup_lite(app: &AppHandle, background: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let settings = load_lite_settings(&lite_settings_file(app)?);
+    // Restored for the tray even when the watcher is off. No folder yet (first
+    // run) or folder gone: no watcher, and the window asks for one.
+    let has_root = matches!(restore_saved_root(app), Ok(Some(_)));
+    if settings.watch && has_root {
+        if let Err(error) = begin_watching(
+            app,
+            false,
+            settings.scan_all_months,
+            false,
+            STANDARD_TEMPLATE,
+        ) {
+            eprintln!("Lite could not start watching: {error}");
+        }
+    }
+    // Built after the watcher starts so the "Watcher mode" checkbox starts correct.
+    let tray = build_tray(app)
+        .map_err(|error| eprintln!("Lite runs without a tray: {error}"))
+        .ok();
+    let tray_available = tray.is_some();
+    *app.state::<LiteRuntime>().inner().tray.lock().unwrap() = tray;
+    if should_open_window(settings.start_in_tray || background, tray_available) {
+        open_main_window(app, Edition::Lite)?;
+    }
+    Ok(())
 }
 
 /// Check if watcher is running.
@@ -1011,14 +1276,192 @@ fn get_avatar_person_photos(
     avatar_person_photos(&recognition_db_path(&app)?, person_id).map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edition {
+    Full,
+    Lite,
+}
+
+/// `--lite`/`--full` win; otherwise an executable named like `*lite*` (the
+/// Windows Lite portable exe is a renamed copy of the same binary) is Lite.
+pub fn edition_from(args: &[String], exe_stem: Option<&str>) -> Edition {
+    if args.iter().any(|arg| arg == "--lite") {
+        return Edition::Lite;
+    }
+    if args.iter().any(|arg| arg == "--full") {
+        return Edition::Full;
+    }
+    match exe_stem {
+        Some(stem) if stem.to_ascii_lowercase().contains("lite") => Edition::Lite,
+        _ => Edition::Full,
+    }
+}
+
+/// `--after-pid N`: a Lite handover process waits for the old process to exit.
+fn after_pid(args: &[String]) -> Option<u32> {
+    let index = args.iter().position(|arg| arg == "--after-pid")?;
+    args.get(index + 1)?.parse().ok()
+}
+
+/// Polls `alive` until it reports false; gives up after `tries` so a stuck old
+/// process can never keep Lite from starting.
+fn wait_until_gone(alive: impl Fn() -> bool, tries: u32, every: Duration) -> bool {
+    for _ in 0..tries {
+        if !alive() {
+            return true;
+        }
+        std::thread::sleep(every);
+    }
+    false
+}
+
+fn process_alive(pid: u32) -> bool {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    system.process(pid).is_some()
+}
+
+/// A closed webview can't give its memory back (WebKit keeps its processes for the
+/// life of the app), so closing the Lite window hands over to a fresh tray-only
+/// process. The organizer lock is held to the end so no move is cut off.
+fn hand_over_to_tray_process(app: &AppHandle) {
+    end_watching(app);
+    let guard = hold_organization_lock();
+    // Inside an AppImage, re-run the AppImage file: this process's mount goes away.
+    let exe = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok());
+    let pid = std::process::id().to_string();
+    let spawned = exe.is_some_and(|exe| {
+        std::process::Command::new(exe)
+            .args(["--lite", "--background", "--after-pid", &pid])
+            .spawn()
+            .is_ok()
+    });
+    if spawned {
+        std::mem::forget(guard); // held until exit
+        app.exit(0);
+    } else {
+        // Keep running with the window closed; the memory just stays in use.
+        drop(guard);
+        let settings = lite_settings_file(app)
+            .map(|file| load_lite_settings(&file))
+            .unwrap_or_default();
+        if settings.watch {
+            let _ = begin_watching(
+                app,
+                false,
+                settings.scan_all_months,
+                false,
+                STANDARD_TEMPLATE,
+            );
+        }
+    }
+}
+
+struct WindowSpec {
+    page: &'static str,
+    title: &'static str,
+    size: (f64, f64),
+    min: (f64, f64),
+    resizable: bool,
+}
+
+fn window_spec(edition: Edition) -> WindowSpec {
+    match edition {
+        Edition::Full => WindowSpec {
+            page: "index.html",
+            title: "VRChat Organizer",
+            size: (1180.0, 760.0),
+            min: (860.0, 620.0),
+            resizable: true,
+        },
+        Edition::Lite => WindowSpec {
+            page: "lite.html",
+            title: "VRChat Organizer Lite",
+            size: (360.0, 460.0),
+            min: (360.0, 460.0),
+            resizable: false,
+        },
+    }
+}
+
+/// Shows the window, creating it if it was closed (Lite destroys it to save memory).
+fn open_main_window(app: &AppHandle, edition: Edition) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.unminimize()?;
+        window.show()?;
+        return window.set_focus();
+    }
+    let spec = window_spec(edition);
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App(spec.page.into()))
+        .title(spec.title)
+        .inner_size(spec.size.0, spec.size.1)
+        .min_inner_size(spec.min.0, spec.min.1)
+        .resizable(spec.resizable)
+        .build()
+        .map(|_| ())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let exe = std::env::current_exe().ok();
+    let edition = edition_from(
+        &args,
+        exe.as_deref()
+            .and_then(|path| path.file_stem())
+            .and_then(|stem| stem.to_str()),
+    );
+    // A Lite handover process starts only after the old one has exited (it
+    // still owns the single-instance name and the watcher until then).
+    if let Some(pid) = after_pid(&args) {
+        wait_until_gone(|| process_alive(pid), 100, Duration::from_millis(100));
+    }
+    let background = args.iter().any(|arg| arg == "--background");
+    let mut builder = tauri::Builder::default();
+    if edition == Edition::Lite {
+        // A second Lite launch shows the running one instead of starting another
+        // watcher; it is also the way back when a tray icon exists but no
+        // desktop panel shows it. Full is unaffected and may run alongside.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = open_main_window(app, Edition::Lite);
+        }));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState::default())
         .manage(LibraryRoot::default())
         .manage(LibraryScan::default())
         .manage(ClipboardState::default())
+        .manage(LiteRuntime::default())
+        .on_window_event(move |window, event| {
+            let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            let app = window.app_handle().clone();
+            let has_tray = app
+                .state::<LiteRuntime>()
+                .inner()
+                .tray
+                .lock()
+                .map(|tray| tray.is_some())
+                .unwrap_or(false);
+            if edition == Edition::Lite && has_tray {
+                api.prevent_close();
+                let _ = window.hide();
+                // Off the main thread: it may wait for a move in progress.
+                std::thread::spawn(move || hand_over_to_tray_process(&app));
+            }
+        })
+        .setup(move |app| {
+            match edition {
+                Edition::Full => open_main_window(app.handle(), edition)?,
+                Edition::Lite => setup_lite(app.handle(), background)?,
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             organize_folder,
             cancel_scan,
@@ -1046,12 +1489,33 @@ pub fn run() {
             start_watching,
             stop_watching,
             is_watching,
+            get_lite_settings,
+            set_lite_settings,
             get_vrchat_status,
             get_avatar_people,
             get_avatar_person_photos,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // `code: None` = the last window closed. With a tray, Lite keeps
+            // watching; tray "Quit" calls app.exit(0), which has a code.
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                let runtime = app.state::<LiteRuntime>();
+                if runtime
+                    .inner()
+                    .tray
+                    .lock()
+                    .map(|tray| tray.is_some())
+                    .unwrap_or(false)
+                {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1163,5 +1627,174 @@ mod tests {
         ] {
             assert!(!valid_collection_name(name), "{name}");
         }
+    }
+
+    #[test]
+    fn edition_comes_from_flag_then_executable_name() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(edition_from(&args(&[]), Some("app")), Edition::Full);
+        assert_eq!(edition_from(&args(&["--lite"]), Some("app")), Edition::Lite);
+        assert_eq!(
+            edition_from(
+                &args(&[]),
+                Some("VRChatOrganizer-2.3.0-windows-x86_64-lite-portable")
+            ),
+            Edition::Lite
+        );
+        assert_eq!(
+            edition_from(&args(&["--full"]), Some("VRChatOrganizer-lite")),
+            Edition::Full
+        );
+        assert_eq!(edition_from(&args(&["--lite"]), None), Edition::Lite);
+        assert_eq!(edition_from(&args(&[]), None), Edition::Full);
+    }
+
+    #[test]
+    fn full_window_matches_the_previous_config_and_lite_is_compact() {
+        let full = window_spec(Edition::Full);
+        assert_eq!(
+            (full.page, full.title, full.size, full.min, full.resizable),
+            (
+                "index.html",
+                "VRChat Organizer",
+                (1180.0, 760.0),
+                (860.0, 620.0),
+                true
+            )
+        );
+        let lite = window_spec(Edition::Lite);
+        assert_eq!(
+            (lite.page, lite.title, lite.size, lite.resizable),
+            ("lite.html", "VRChat Organizer Lite", (360.0, 460.0), false)
+        );
+    }
+
+    #[test]
+    fn lite_settings_round_trip_and_survive_damage() {
+        let dir = std::env::temp_dir().join(format!("vrco-lite-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("app/lite-settings.json");
+
+        // Missing file: defaults, nothing turned on.
+        assert_eq!(load_lite_settings(&file), LiteSettings::default());
+        assert!(!LiteSettings::default().watch);
+
+        let saved = LiteSettings {
+            watch: true,
+            start_in_tray: true,
+            scan_all_months: false,
+        };
+        save_lite_settings(&file, &saved).unwrap();
+        assert_eq!(load_lite_settings(&file), saved);
+
+        // Missing keys fall back per field; unknown keys are ignored.
+        std::fs::write(&file, r#"{"watch":true,"futureOption":1}"#).unwrap();
+        assert_eq!(
+            load_lite_settings(&file),
+            LiteSettings {
+                watch: true,
+                ..LiteSettings::default()
+            }
+        );
+
+        // Truncated or wrong-typed JSON: defaults, no panic.
+        for damaged in [r#"{"watch":tr"#, r#"{"watch":"yes"}"#, "", "[]"] {
+            std::fs::write(&file, damaged).unwrap();
+            assert_eq!(
+                load_lite_settings(&file),
+                LiteSettings::default(),
+                "{damaged}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn engine_config_is_shared_and_defaults_to_world_template() {
+        let config = engine_config(PathBuf::from("/lib"), false, true, false, "  ").unwrap();
+        assert_eq!(config.template, STANDARD_TEMPLATE);
+        assert!(config.scan_all_months && !config.dry_run && !config.single_folder);
+        assert_eq!(
+            engine_config(PathBuf::from("/lib"), false, false, false, " {world} ")
+                .unwrap()
+                .template,
+            "{world}"
+        );
+        assert!(engine_config(PathBuf::from("/lib"), false, false, false, "{nope}").is_err());
+    }
+
+    #[test]
+    fn saved_root_is_restored_without_a_webview() {
+        // Start-in-tray Lite has no page to call get_library_root, so setup
+        // must restore the saved folder itself.
+        let dir = std::env::temp_dir().join(format!("vrco-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let library = dir.join("VRChat");
+        std::fs::create_dir_all(&library).unwrap();
+        let file = dir.join("app/library-root.txt");
+        assert_eq!(read_saved_root(&file, None), Ok(None));
+        persist_root(&file, &library.to_string_lossy(), false).unwrap();
+        assert_eq!(
+            read_saved_root(&file, None).unwrap().map(|root| root.0),
+            Some(library.to_string_lossy().into_owned())
+        );
+        // Saved folder deleted or unmounted: an error, so no watcher starts.
+        std::fs::remove_dir_all(&library).unwrap();
+        assert!(read_saved_root(&file, None).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tray_shows_the_last_organize_result_without_a_window() {
+        let stats = OrganizerStats {
+            organized: 12,
+            ..OrganizerStats::default()
+        };
+        assert_eq!(
+            organize_result_label(&Ok(stats)),
+            "Organize now (last run: 12 moved)"
+        );
+        assert_eq!(
+            organize_result_label(&Err("no screenshot folder selected".into())),
+            "Organize now (last run failed)"
+        );
+    }
+
+    #[test]
+    fn handover_process_waits_for_the_old_one() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            after_pid(&args(&["--lite", "--after-pid", "4242"])),
+            Some(4242)
+        );
+        assert_eq!(after_pid(&args(&["--lite"])), None);
+        assert_eq!(after_pid(&args(&["--after-pid", "nope"])), None);
+        assert_eq!(after_pid(&args(&["--after-pid"])), None);
+
+        let polls = std::cell::Cell::new(0);
+        assert!(wait_until_gone(
+            || {
+                polls.set(polls.get() + 1);
+                polls.get() < 3
+            },
+            10,
+            Duration::ZERO
+        ));
+        assert_eq!(polls.get(), 3);
+        assert!(
+            !wait_until_gone(|| true, 5, Duration::ZERO),
+            "gives up instead of hanging"
+        );
+    }
+
+    #[test]
+    fn lite_never_hides_without_a_tray() {
+        assert!(should_open_window(false, true));
+        assert!(!should_open_window(true, true));
+        assert!(
+            should_open_window(true, false),
+            "no tray: hiding would leave an invisible process"
+        );
+        assert!(should_open_window(false, false));
     }
 }

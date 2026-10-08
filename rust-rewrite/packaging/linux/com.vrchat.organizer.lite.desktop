@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=VRChat Organizer Lite
+Comment=Automatically sort VRChat screenshots into world folders
+Exec=vrchat-organizer --lite %U
+Icon=vrchat-organizer
+Terminal=false
+Type=Application
+Categories=Graphics;
+Keywords=VRChat;Screenshots;Photos;Organizer;
+StartupNotify=true

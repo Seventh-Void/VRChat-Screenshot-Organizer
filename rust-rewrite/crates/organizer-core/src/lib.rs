@@ -32,6 +32,15 @@ struct CachedPhoto {
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MONTH_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 static ORGANIZATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Waits for any organize or undo run to finish and keeps new ones from starting
+/// while the guard lives. Used before the app process exits, so no move is cut off.
+pub fn hold_organization_lock() -> std::sync::MutexGuard<'static, ()> {
+    ORGANIZATION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
 const PLACEHOLDER_WORLD_PATTERNS: &[&str] = &[
     "capture",
     "screenshot",
@@ -1613,9 +1622,13 @@ pub fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 /// Final step of a move: drop the source name, or undo the new name if that fails.
+/// A source that is already gone (another organizer instance moved it) means
+/// `dst` may be the only copy left, so it is kept.
 fn remove_source(src: &Path, dst: &Path) -> anyhow::Result<()> {
     fs::remove_file(src).map_err(|error| {
-        let _ = fs::remove_file(dst);
+        if error.kind() != std::io::ErrorKind::NotFound {
+            let _ = fs::remove_file(dst);
+        }
         error.into()
     })
 }
@@ -2700,6 +2713,65 @@ mod tests {
             .collect();
         files.sort();
         files
+    }
+
+    #[test]
+    fn holding_the_organization_lock_pauses_organizing_until_released() {
+        let dir = fresh_dir("hold-lock");
+        let month = dir.join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let name = "VRChat_2026-10-07_23-32-04.272_8x8.png";
+        fs::write(month.join(name), vrchat_png(Some("Held"), 8, 8)).unwrap();
+        let guard = hold_organization_lock();
+        let (photo, config) = (month.join(name), real_run(&dir));
+        let worker = std::thread::spawn(move || {
+            organize_single_file(&photo, &config, &mut OrganizerStats::default()).unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            month.join(name).exists(),
+            "must not move while the lock is held"
+        );
+        drop(guard);
+        worker.join().unwrap();
+        assert_eq!(tree(&dir), vec![format!("2026-10/Held/{name}")]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finishing_a_move_never_deletes_the_destination_when_the_source_is_already_gone() {
+        // Two watchers (Full + Lite) on a filesystem without hard links: the
+        // other process already removed the source, so our destination may be
+        // the only copy left.
+        let dir = fresh_dir("vanished-source");
+        let (src, dst) = (dir.join("a.png"), dir.join("b.png"));
+        fs::write(&dst, b"only copy").unwrap();
+        assert!(remove_source(&src, &dst).is_err());
+        assert_eq!(fs::read(&dst).unwrap(), b"only copy");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn organizing_a_path_another_instance_already_moved_is_harmless() {
+        let dir = fresh_dir("two-instances");
+        let month = dir.join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let name = "VRChat_2026-10-07_23-32-04.272_8x8.png";
+        let photo = month.join(name);
+        fs::write(&photo, vrchat_png(Some("Lite Parity"), 8, 8)).unwrap();
+
+        organize_single_file(&photo, &real_run(&dir), &mut OrganizerStats::default()).unwrap();
+        let expected = vec![format!("2026-10/Lite Parity/{name}")];
+        assert_eq!(tree(&dir), expected);
+
+        // A second instance (Full and Lite both watching) sees the stale path.
+        let second = organize_single_file(&photo, &real_run(&dir), &mut OrganizerStats::default());
+        assert_eq!(
+            tree(&dir),
+            expected,
+            "second run must not touch anything: {second:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -123,6 +123,26 @@ async function showFixture(page, width, height) {
     assert.equal(await page.evaluate(() => window.__dragstarts || 0), 0, 'image must not start a native drag');
     assert.equal(await page.locator('#drawPreview').count(), 0, 'live box removed on release');
     cases += 1;
+
+    // Full: changing "older months" while watching restarts the watcher with the
+    // new option, so Full and Lite never organize with different settings.
+    await page.evaluate(() => {
+      window.__watchCalls = [];
+      window.__invokeOverride = (cmd, args) => {
+        if (cmd !== 'start_watching' && cmd !== 'stop_watching') return undefined;
+        window.__watchCalls.push([cmd, args]);
+        return 'ok';
+      };
+      document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+      localStorage.setItem('vrchat-organizer-scan-all-months', 'false');
+      setWatching(true);
+      document.querySelector('#scanAllMonthsSwitch').click();
+    });
+    await page.waitForFunction(() => window.__watchCalls.length >= 2, null, { timeout: 2000 });
+    const watchCalls = await page.evaluate(() => window.__watchCalls);
+    assert.deepEqual(watchCalls.map(([cmd]) => cmd), ['stop_watching', 'start_watching']);
+    assert.deepEqual(watchCalls[1][1], { dryRun: false, scanAllMonths: true, singleFolder: false, template: '{world}' });
+    cases += 1;
     assert.deepEqual(pageErrors, [], 'page errors');
     console.log(`viewer layout: ${cases} cases passed, 0 failed`);
   } finally {

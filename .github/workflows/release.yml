@@ -119,6 +119,8 @@ jobs:
           $releaseDir = "../release/v${{ steps.version.outputs.version }}"
           New-Item -ItemType Directory -Force $releaseDir | Out-Null
           Copy-Item target/release/app.exe "$releaseDir/VRChatOrganizer-${{ steps.version.outputs.version }}-windows-x86_64-portable.exe"
+          # Lite edition: same exe; the "lite" in its name selects the Lite UI.
+          Copy-Item target/release/app.exe "$releaseDir/VRChatOrganizer-${{ steps.version.outputs.version }}-windows-x86_64-lite-portable.exe"
           Copy-Item target/release/bundle/nsis/*.exe $releaseDir
           Copy-Item target/release/bundle/msi/*.msi $releaseDir
         working-directory: ./rust-rewrite

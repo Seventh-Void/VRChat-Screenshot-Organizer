@@ -9,6 +9,7 @@ Move each VRChat screenshot into world-named folder **inside VRChat month folder
 - Base-root photos routed by filename date into `<base>/YYYY-MM/<World>/`.
 - 2048×1440 prints → `<base>/YYYY-MM/Prints/`. No world metadata → photo stays put.
 - Every move undoable; watcher organizes live while VRChat runs.
+- Two editions, one binary: Full (`index.html`) and Lite (`lite.html`; `--lite` or exe name containing `lite`). Both must pass engine `dryRun:false, singleFolder:false, template:'{world}'` (Rust `STANDARD_TEMPLATE`/`engine_config`). Lite never calls library/thumbnail/people commands.
 - GUI = library (worlds, timeline, people, collections, storage, activity) + manual person tagging (draw box, pick name from photo's player metadata). Avatar AI removed 2026-10-07 at user request (unreliable; avatars change) — don't re-add without asking.
 
 ## Hard rules

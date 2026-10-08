@@ -11,7 +11,7 @@ watch mode, undo support and AppImage packaging documented there.
 [![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?logo=tauri)](https://v2.tauri.app/)
 [![Release](https://img.shields.io/github/v/release/Seventh-Void/VRChat-Screenshot-Organizer)](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases)
 
-> **Version 2.2.1** — the current Rust/Tauri desktop release.
+> **Version 2.3.0** — the current Rust/Tauri desktop release.
 
 ![VRChat Organizer library](./docs/screenshots/library.png)
 
@@ -20,6 +20,28 @@ watch mode, undo support and AppImage packaging documented there.
 | ![World detail](./docs/screenshots/world.png) | ![Photo viewer with a drawn person box](./docs/screenshots/viewer.png) | ![People gallery](./docs/screenshots/people.png) |
 
 <sub>Screenshots use demo data.</sub>
+
+## 🧭 Editions
+
+Both editions are the same program with the same organizing engine, so they
+produce identical folders. Pick the experience you want.
+
+- **Full**: the complete app. Library browser, photo viewer, person tagging,
+  collections, storage and activity views, plus watcher mode.
+- **Lite**: a small window and a tray icon for "set it and forget it".
+  Watcher mode (switch it from the window or the tray), Organize now, Undo
+  last run, and quick settings for older months and starting in the tray.
+  Closing the window keeps the watcher running in the tray with no browser
+  view loaded.
+
+| Edition | Linux | Windows |
+|---|---|---|
+| Full | `VRChatOrganizer-<version>-x86_64.AppImage` | installer, MSI or `…-windows-x86_64-portable.exe` |
+| Lite | `VRChatOrganizer-<version>-lite-x86_64.AppImage` | `…-windows-x86_64-lite-portable.exe` |
+
+Any build can also start as Lite with `--lite`. Both editions share the
+chosen screenshot folder. "Include older months" is set separately in each.
+Lite's watcher mode starts off; turn it on once and it resumes at every launch.
 
 ## 🎯 Features
 
@@ -80,10 +102,10 @@ This project has been developed with assistance from an AI coding tool. While th
 ### Download
 
 Download the latest version from the [releases page](https://github.com/Seventh-Void/VRChat-Screenshot-Organizer/releases).
-The v2.2.1 release includes:
+The v2.3.0 release includes:
 
-- `VRChatOrganizer-2.2.1-x86_64.AppImage` — Linux x86_64 Tauri GUI bundle
-- `VRChatOrganizer-2.2.1-windows-x86_64-cli.exe` — Windows x86_64 CLI build
+- `VRChatOrganizer-2.3.0-x86_64.AppImage` — Linux x86_64 Tauri GUI bundle
+- `VRChatOrganizer-2.3.0-windows-x86_64-cli.exe` — Windows x86_64 CLI build
 - Native Windows Tauri portable and installer builds produced by GitHub Actions
 - `SHA256SUMS` and the release README
 
@@ -93,8 +115,8 @@ The AppImage contains the application and release assets. Install the Tauri
 Linux runtime libraries listed in the build requirements before launching it:
 
 ```bash
-chmod +x VRChatOrganizer-2.2.1-x86_64.AppImage
-./VRChatOrganizer-2.2.1-x86_64.AppImage
+chmod +x VRChatOrganizer-2.3.0-x86_64.AppImage
+./VRChatOrganizer-2.3.0-x86_64.AppImage
 ```
 
 On Debian/Ubuntu, the required WebKitGTK/GTK packages are the same packages
@@ -110,7 +132,7 @@ contains the application icon, desktop entry, and AppStream metadata.
 
 Use the native Windows Tauri NSIS installer for a normal Start Menu installation,
 or use the portable Tauri executable when you do not want to install anything.
-The separately provided `VRChatOrganizer-2.2.1-windows-x86_64-cli.exe` is the
+The separately provided `VRChatOrganizer-2.3.0-windows-x86_64-cli.exe` is the
 headless CLI build and does not provide the GUI. Windows 10/11 includes WebView2
 on supported systems; if a GUI build reports a missing WebView2 runtime, install it from Microsoft's
 [WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/).
@@ -125,10 +147,10 @@ on supported systems; if a GUI build reports a missing WebView2 runtime, install
 
 ```bash
 # Make the AppImage executable
-chmod +x VRChatOrganizer-2.2.1-x86_64.AppImage
+chmod +x VRChatOrganizer-2.3.0-x86_64.AppImage
 
 # Launch the desktop app
-./VRChatOrganizer-2.2.1-x86_64.AppImage
+./VRChatOrganizer-2.3.0-x86_64.AppImage
 ```
 
 The GUI provides:
@@ -192,8 +214,8 @@ cargo build --release
 ./build-windows.sh
 ```
 
-The scripts write release assets to `../release/v2.2.1/`:
-`VRChatOrganizer-2.2.1-x86_64.AppImage`, the Windows CLI executable, and
+The scripts write release assets to `../release/v2.3.0/`:
+`VRChatOrganizer-2.3.0-x86_64.AppImage`, the Windows CLI executable, and
 `SHA256SUMS`. The native Windows GUI, portable executable, NSIS installer, and
 MSI are built on the Windows GitHub Actions runner because Tauri uses the native
 Windows WebView2 toolchain.
@@ -320,7 +342,7 @@ The **Watch** feature uses a combination of OS filesystem events (`inotify` on L
 
 ### Permission denied errors
 - Ensure you have read/write permissions on the VRChat pictures directory
-- Make the AppImage executable: `chmod +x VRChatOrganizer-2.2.1-x86_64.AppImage`
+- Make the AppImage executable: `chmod +x VRChatOrganizer-2.3.0-x86_64.AppImage`
 
 ### Tauri GUI shows a blank/black window
 - Ensure WebKit2GTK is installed on your system (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
@@ -356,7 +378,7 @@ VRChat-Screenshot-Organizer/
 │   │   └── capabilities/
 │   │       └── default.json
 │   └── README.md                    # Rust-specific details
-├── release/v2.2.1/                  # Local release staging area (ignored binaries)
+├── release/v2.3.0/                  # Local release staging area (ignored binaries)
 ├── docs/screenshots/                # Documentation screenshots
 ├── README.md                        # This file
 ├── CONTRIBUTING.md

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/png" href="app-icon.png">
+  <title>VRChat Organizer Lite</title>
+  <link rel="stylesheet" href="tokens.css">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: var(--canvas); color: var(--ink); font: var(--fs-md)/1.45 var(--ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+    h1 { margin: 0 0 4px; font-size: var(--fs-title-s); font-weight: 700; }
+    .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm); }
+    .dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--faint); flex: none; }
+    .dot[data-state="on"] { background: var(--accent); }
+    .dot[data-state="error"] { background: var(--danger); }
+    .folder { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+    .folder span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+    button { font: inherit; }
+    /* Buttons, text buttons, switches and focus ring copied from the Full edition (index.html). */
+    .text-btn { border: 0; background: none; color: var(--accent); padding: 0; cursor: pointer; font-size: var(--fs-xs); white-space: nowrap; }
+    .text-btn:disabled { cursor: wait; opacity: .6; }
+    .btn { border: 1px solid var(--line); background: transparent; border-radius: var(--r-md); padding: 9px 13px; cursor: pointer; color: var(--muted); }
+    .btn:disabled { cursor: default; opacity: .62; }
+    .btn:hover:not(:disabled) { color: var(--ink); background: var(--accent-a08); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+    .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); color: var(--on-accent); }
+    .actions { display: flex; gap: 8px; }
+    .actions .primary { flex: 1; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 9px 0; }
+    .toggle-row strong { font-size: var(--fs-sm); }
+    .toggle-row small { display: block; color: var(--faint); margin-top: 2px; font-size: var(--fs-xs); }
+    .toggle { flex: none; width: 37px; height: 21px; border: 0; border-radius: var(--r-pill); background: var(--track); cursor: pointer; padding: 2px; }
+    .toggle i { display: block; width: 17px; height: 17px; border-radius: 50%; background: var(--knob); transition: .2s; }
+    .toggle[aria-checked="true"] { background: var(--accent); }
+    .toggle[aria-checked="true"] i { transform: translateX(16px); background: var(--on-accent); }
+    .toggle:disabled { cursor: default; opacity: .62; }
+    button:focus-visible { outline: 1.5px solid var(--accent-a72); outline-offset: 2px; }
+    .activity { margin: auto 0 0; color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VRChat Organizer Lite</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Starting…</span></div>
+  </header>
+  <div class="folder"><span id="folder">No folder chosen</span><button class="text-btn" id="chooseFolder" type="button">Change</button></div>
+  <button class="text-btn" id="detectFolder" type="button" hidden>Find my VRChat folder automatically</button>
+  <div class="actions">
+    <button class="btn primary" id="organize" type="button">Organize now</button>
+    <button class="btn" id="undo" type="button">Undo last run</button>
+  </div>
+  <section aria-label="Quick settings">
+    <div class="toggle-row"><span><strong>Watcher mode</strong><small>Organize new screenshots automatically</small></span><button class="toggle" id="watchToggle" type="button" role="switch" aria-checked="false" aria-label="Watcher mode"><i></i></button></div>
+    <div class="toggle-row"><span><strong>Include older months</strong></span><button class="toggle" id="monthsToggle" type="button" role="switch" aria-checked="false" aria-label="Include older months"><i></i></button></div>
+    <div class="toggle-row"><span><strong>Start in the tray</strong><small>Needs a desktop that shows tray icons</small></span><button class="toggle" id="trayToggle" type="button" role="switch" aria-checked="false" aria-label="Start in the tray"><i></i></button></div>
+  </section>
+  <p class="activity" id="activity" aria-live="polite">Every move can be undone.</p>
+  <script src="lite.js"></script>
+</body>
+</html>

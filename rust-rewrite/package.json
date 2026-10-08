@@ -4,7 +4,7 @@
   "description": "This directory contains the Rust-based implementation of the VRChat Screenshot Organizer. It is a pure-Rust replacement for the original Python version — **no Python or Pillow dependencies required**.",
   "main": "index.js",
   "scripts": {
-    "test": "node frontend/tag-dialog.dom.test.js && node frontend/tagging-state.test.js && node frontend/viewer-layout.test.js"
+    "test": "node frontend/tag-dialog.dom.test.js && node frontend/tagging-state.test.js && node frontend/viewer-layout.test.js && node frontend/lite.test.js"
   },
   "keywords": [],
   "type": "commonjs",

@@ -175,7 +175,7 @@ cd rust-rewrite
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
-`release/v2.2.1/` (with the version read from Cargo metadata).
+`release/v2.3.0/` (with the version read from Cargo metadata).
 It rebuilds both artifacts and fails if either one cannot be produced.
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
@@ -185,7 +185,7 @@ The Windows cross-compilation helper uses the same versioned release directory:
 ./build-windows.sh
 ```
 
-It produces `release/v2.2.1/VRChatOrganizer-2.2.1-windows-x86_64-cli.exe` and
+It produces `release/v2.3.0/VRChatOrganizer-2.3.0-windows-x86_64-cli.exe` and
 updates `SHA256SUMS` for all generated release binaries.
 This is the standalone Windows CLI executable; the Tauri GUI executable and
 NSIS/MSI installers must be built natively on Windows or by the Windows CI

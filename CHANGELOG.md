@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.3.0 - 2026-10-08
+
+- **Lite edition:** a compact window and tray icon with watcher mode,
+  Organize now, Undo and three quick settings. It uses the same engine as
+  the full app, so results are identical. Closing the window keeps the
+  watcher running from the tray without a browser view. Ships as
+  `*-lite-x86_64.AppImage` and `*-windows-x86_64-lite-portable.exe`; any
+  build starts as Lite with `--lite`.
+  - Closing the window really frees memory: Lite restarts itself as a small
+    tray-only process (about 60 MB, no browser view) once any move in
+    progress has finished.
+  - Opening Lite again shows the running one instead of starting a second
+    watcher.
+- **Safer moves:** with two organizers watching the same folder on a drive
+  without hard links (FAT/exFAT, some network shares), a photo could be
+  deleted. A move now never removes its copy when the original is already gone.
+- Changing "Include older months" in the full app now restarts a running
+  watcher with the new setting.
+
 ## 2.2.1 - 2026-10-08
 
 - **Fixed drawing person boxes:** dragging on the photo dragged the image

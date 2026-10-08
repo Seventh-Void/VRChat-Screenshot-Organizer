@@ -17,6 +17,7 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 RELEASE_DIR="$SCRIPT_DIR/../release/v${VERSION}"
 mkdir -p "$RELEASE_DIR"
 rm -f "$RELEASE_DIR"/VRChatOrganizer-"$VERSION"-x86_64.AppImage \
+  "$RELEASE_DIR"/VRChatOrganizer-"$VERSION"-lite-x86_64.AppImage \
   "$RELEASE_DIR"/SHA256SUMS
 
 # Step 1: Build the Tauri app in release mode
@@ -66,7 +67,28 @@ test -s "${RELEASE_DIR}/${APPIMAGE_NAME}" || {
   echo "AppImage build did not produce ${RELEASE_DIR}/${APPIMAGE_NAME}" >&2
   exit 1
 }
-sha256sum "${RELEASE_DIR}/${APPIMAGE_NAME}" > "${RELEASE_DIR}/SHA256SUMS"
+# Lite edition: same binary and AppDir, launched with --lite.
+LITE_NAME="VRChatOrganizer-${VERSION}-lite-x86_64.AppImage"
+rm -f "$APPDIR/AppRun" "$APPDIR/com.vrchat.organizer.desktop" \
+  "$APPDIR/usr/share/applications/com.vrchat.organizer.desktop" \
+  "$APPDIR/usr/share/metainfo/com.vrchat.organizer.appdata.xml"
+cp "$SCRIPT_DIR/packaging/linux/com.vrchat.organizer.lite.desktop" \
+  "$APPDIR/usr/share/applications/com.vrchat.organizer.lite.desktop"
+ln -sf "usr/share/applications/com.vrchat.organizer.lite.desktop" "$APPDIR/com.vrchat.organizer.lite.desktop"
+cat > "$APPDIR/AppRun" <<'APPRUN'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/vrchat-organizer" --lite "$@"
+APPRUN
+chmod +x "$APPDIR/AppRun"
+echo ">>> Building Lite AppImage as: ${LITE_NAME}..."
+appimagetool "$APPDIR" "${RELEASE_DIR}/${LITE_NAME}"
+test -s "${RELEASE_DIR}/${LITE_NAME}" || {
+  echo "Lite AppImage build did not produce ${RELEASE_DIR}/${LITE_NAME}" >&2
+  exit 1
+}
+
+(cd "$RELEASE_DIR" && sha256sum -- *.AppImage) > "${RELEASE_DIR}/SHA256SUMS"
 
 echo "=== Build complete ==="
 echo ""
