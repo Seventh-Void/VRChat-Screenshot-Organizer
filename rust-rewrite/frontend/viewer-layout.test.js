@@ -143,6 +143,23 @@ async function showFixture(page, width, height) {
     assert.deepEqual(watchCalls.map(([cmd]) => cmd), ['stop_watching', 'start_watching']);
     assert.deepEqual(watchCalls[1][1], { dryRun: false, scanAllMonths: true, singleFolder: false, template: '{world}' });
     cases += 1;
+    // WebKitGTK builds a live blurred backdrop for every element with
+    // backdrop-filter; one per world card ran the Linux app past 20 GB after
+    // an all-months scan. Nothing that repeats per card may use it.
+    await page.evaluate(() => {
+      document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+      document.querySelector('[data-view="library"]').click();
+      applyLibrarySnapshot({
+        worldDetails: Array.from({ length: 40 }, (_, i) => ({ name: `World ${i}`, lastCapture: 1, photos: [{ path: `/library/2026-10/World ${i}/a.png`, capturedAt: 1 }] })),
+        unorganizedPhotos: []
+      });
+      renderWorlds();
+    });
+    const blurred = await page.evaluate(() => [...document.querySelectorAll('#worldGrid *')]
+      .filter(element => element.getClientRects().length && getComputedStyle(element).backdropFilter !== 'none').length);
+    assert.equal(await page.locator('#worldGrid .world').count(), 40);
+    assert.equal(blurred, 0, `${blurred} blurred elements in the world grid`);
+    cases += 1;
     assert.deepEqual(pageErrors, [], 'page errors');
     console.log(`viewer layout: ${cases} cases passed, 0 failed`);
   } finally {

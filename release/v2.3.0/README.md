@@ -29,7 +29,15 @@ starts as Lite with `--lite`.
 
 ## Release artifacts
 
-@TABLE@
+| File | Edition / platform | SHA-256 |
+|---|---|---|
+| `VRChatOrganizer-2.3.0-x86_64.AppImage` | Linux x86_64 — Full | `7ec8c269d77df217b48ff49a327ddcb19edb9283f14410119e267069b618ed54` |
+| `VRChatOrganizer-2.3.0-lite-x86_64.AppImage` | Linux x86_64 — Lite | `f23c2e32cbf820a1771a5a9e6f212f340a52204a37c41ee6d37aa594ab7e85a1` |
+| `VRChatOrganizer-2.3.0-windows-x86_64-portable.exe` | Windows x86_64 — Full, portable (no install) | `fecf733c14d4b14902ce1af02812b075ecb6e4280e7f3172e6f90d5159b30899` |
+| `VRChatOrganizer-2.3.0-windows-x86_64-lite-portable.exe` | Windows x86_64 — Lite, portable (no install) | `fecf733c14d4b14902ce1af02812b075ecb6e4280e7f3172e6f90d5159b30899` |
+| `VRChat.Organizer_2.3.0_x64-setup.exe` | Windows x86_64 — Full installer | `07bf253edafd63957109fc3eacc5d10de3b8aeb59d3e77c17ff935c96de39019` |
+| `VRChat.Organizer_2.3.0_x64_en-US.msi` | Windows x86_64 — Full installer (MSI) | `bc8ce17818d50ed9a86e13811b608bb53192088819b09748ff347de8c2bedcbe` |
+| `VRChatOrganizer-2.3.0-windows-x86_64-cli.exe` | Windows x86_64 — command-line tool | `3d323cee0c97fe2b1b00ab3e11a6188621fd10364d28b592e615ebdb67451a46` |
 
 On Windows, most people want the installer or a portable exe; the
 `-cli.exe` is the command-line organizer only.

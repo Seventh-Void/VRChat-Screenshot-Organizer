@@ -54,6 +54,8 @@ Traps found hard way. Add new at end of right section; keep each few lines with 
 ## Frontend
 - `applyTheme` only updates CSS variables it sets; hard-coded accent `rgba(...)` stays violet in other themes — use accent tint tokens.
 - Inter not bundled (no external font loads by design) → weight 650 renders as 600/700 — stick to 400/600/700.
+- **Never `backdrop-filter` on anything repeated (cards, tiles, chips).** WebKitGTK allocates a live blurred backdrop per element; the per-world-card favourite button made the Linux app grow ~500 MB/s to 20 GB + swap after an all-months scan (174 cards) and crash. Chromium/Playwright does NOT reproduce it. One full-screen overlay blur is fine. Pinned by viewer-layout "blurred elements in the world grid".
+- Memory checks must run in real WebKitGTK under a hard cap: `systemd-run --user --scope -p MemoryMax=2G -p MemorySwapMax=0 …` and read the scope's `memory.current` (WebKit's web process sits under bwrap, so summing the app's child PIDs misses it). Python `gi` WebKit2 4.1 in a real unfocused `Gtk.Window` loads `index.html` with a stub `__TAURI__` (OffscreenWindow has no GL on Wayland and aborts).
 - `color-mix()` needs WebKitGTK ≥ 2.40 — set tint variables from JS instead.
 - Minimum window 860×620: `max-width: 600px` rules never apply; test layouts at 860×620.
 - Library toolbar (tabs + world filters + resolution chips) barely fits one row at 1180 px — bigger chip font/padding wraps it. Re-check after touching chip/tab sizes.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1 - 2026-10-08
+
+- **Fixed a memory runaway that crashed the app on Linux.** After scanning all
+  month folders, the library page grew by hundreds of MB per second (20 GB+)
+  until the app died. The cause was a blur effect on the favourite button of
+  every world card, which WebKitGTK handles badly. The library now stays at
+  about 400 MB with every month loaded.
+
 ## 2.3.0 - 2026-10-08
 
 - **Lite edition:** a compact window and tray icon with watcher mode,
