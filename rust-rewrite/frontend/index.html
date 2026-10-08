@@ -334,6 +334,8 @@
     .lightbox-tag-boxes { position: absolute; inset: 0; pointer-events: none; }
     .lightbox-tag-box { position: absolute; border: 2px solid var(--accent); border-radius: var(--r-sm); background: var(--accent-a12); box-shadow: 0 0 0 1px rgba(14,13,20,.65); transition: background .14s ease,border-color .14s ease; pointer-events: auto; cursor: move; }
     .lightbox-tag-box::after { content: ""; position: absolute; right: -5px; bottom: -5px; width: 9px; height: 9px; border: 1px solid var(--ink); border-radius: 2px; background: var(--accent); cursor: nwse-resize; }
+    .lightbox-tag-box.preview { pointer-events: none; }
+    .lightbox-tag-box.preview::after { display: none; }
     .lightbox-tag-box.highlight { background: var(--accent-a35); border-color: #fff; }
     .lightbox-image-wrap.drawing { cursor: crosshair; }
     .lightbox-image-wrap.drawing::after { content: "Release to save this person"; position: absolute; left: 50%; top: 12px; transform: translateX(-50%); padding: 6px 10px; border-radius: var(--r-sm); background: rgba(14,13,20,.86); color: var(--ink); font-size: var(--fs-xs); pointer-events: none; }
@@ -478,7 +480,7 @@
       </div>
     </main>
   </div>
-  <dialog class="lightbox" id="lightbox" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox" type="button">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media" id="lightboxMedia"><div class="lightbox-image-wrap" id="lightboxImageWrap"><img id="lightboxImage" alt=""><div class="lightbox-tag-boxes" id="lightboxTagBoxes" aria-hidden="true"></div><div class="lightbox-tag-overlay" id="lightboxTagOverlay"></div><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Tagged people</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="lightbox-actions lightbox-tag-actions"><button class="btn primary" id="drawPersonTag" type="button">Draw person box</button></div><button class="text-btn" id="editPhotoTags" type="button">Edit metadata tags</button><div class="photo-meta-row"><span>World metadata</span><strong id="lightboxWorldPlayerCount"></strong></div><div class="lightbox-players" id="lightboxWorldPlayers"></div><p class="lightbox-tag-hint">Drawn boxes and their crops stay on this device.</p><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside><div class="tag-menu" id="tagMenu" hidden role="group" aria-label="Tag a person"><strong>Tag a person in this image</strong><div class="tag-selected" id="tagSelected" aria-live="polite"></div><input id="tagPersonSearch" type="search" maxlength="80" autocomplete="off" placeholder="Search player name" aria-label="Search player name"><div class="tag-suggestions" id="tagSuggestions" role="listbox"></div><div class="tag-menu-actions"><button class="btn" id="cancelTag" type="button">Cancel</button><button class="btn primary" id="saveTag" type="button">Save tag</button></div></div></dialog>
+  <dialog class="lightbox" id="lightbox" aria-label="Photo viewer"><span class="lightbox-counter" id="lightboxCounter"></span><button class="btn lightbox-close" id="closeLightbox" type="button">Close</button><div class="lightbox-nav"><button class="icon-btn" id="previousPhoto" aria-label="Previous photo">←</button><button class="icon-btn" id="nextPhoto" aria-label="Next photo">→</button></div><div class="lightbox-media" id="lightboxMedia"><div class="lightbox-image-wrap" id="lightboxImageWrap"><img id="lightboxImage" alt="" draggable="false"><div class="lightbox-tag-boxes" id="lightboxTagBoxes" aria-hidden="true"></div><div class="lightbox-tag-overlay" id="lightboxTagOverlay"></div><div class="photo-error" id="lightboxError" hidden>Photo unavailable</div></div></div><aside class="lightbox-panel"><div class="eyebrow">Capture</div><h2 id="lightboxWorld"></h2><p id="lightboxWorldInfo"></p><p id="lightboxTime"></p><div class="photo-meta-row"><span>Tagged people</span><strong id="lightboxPlayerCount"></strong></div><div class="lightbox-players" id="lightboxPlayers"></div><div class="lightbox-actions lightbox-tag-actions"><button class="btn primary" id="drawPersonTag" type="button">Draw person box</button></div><button class="text-btn" id="editPhotoTags" type="button">Edit metadata tags</button><div class="photo-meta-row"><span>World metadata</span><strong id="lightboxWorldPlayerCount"></strong></div><div class="lightbox-players" id="lightboxWorldPlayers"></div><p class="lightbox-tag-hint">Drawn boxes and their crops stay on this device.</p><div class="lightbox-actions"><button class="btn" id="openPhotoLocation">Open file location</button><button class="btn" id="copyPhotoPath">Copy path</button></div></aside><div class="tag-menu" id="tagMenu" hidden role="group" aria-label="Tag a person"><strong>Tag a person in this image</strong><div class="tag-selected" id="tagSelected" aria-live="polite"></div><input id="tagPersonSearch" type="search" maxlength="80" autocomplete="off" placeholder="Search player name" aria-label="Search player name"><div class="tag-suggestions" id="tagSuggestions" role="listbox"></div><div class="tag-menu-actions"><button class="btn" id="cancelTag" type="button">Cancel</button><button class="btn primary" id="saveTag" type="button">Save tag</button></div></div></dialog>
   <div class="onboarding" id="onboarding" hidden>
     <div class="onboarding-panel" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
       <div class="onboarding-top"><div class="eyebrow">Getting started</div><span class="onboarding-step" id="onboardingStep">Step 1 of 4</span></div>
@@ -1538,7 +1540,7 @@
         box.addEventListener('pointerleave', () => highlightPositionalTag(box.dataset.boxPerson, false));
         box.addEventListener('pointerdown', event => {
           const tag = (viewerState.tags || []).find(item => String(item.id) === box.dataset.boxPerson);
-          if (!tag || $('#lightboxImageWrap').classList.contains('drawing')) return;
+          if (!tag) return;
           event.preventDefault();
           const rect = $('#lightboxImage').getBoundingClientRect();
           editingPersonTag = {
@@ -1723,6 +1725,23 @@
       $('#lightboxImage').setPointerCapture(event.pointerId);
     });
     $('#lightboxImageWrap').addEventListener('pointermove', event => {
+      if (drawingPersonTag) {
+        const { rect, startX, startY } = drawingPersonTag;
+        const endX = Math.max(rect.left, Math.min(rect.right, event.clientX));
+        const endY = Math.max(rect.top, Math.min(rect.bottom, event.clientY));
+        let preview = $('#drawPreview');
+        if (!preview) {
+          preview = document.createElement('span');
+          preview.id = 'drawPreview';
+          preview.className = 'lightbox-tag-box preview';
+          $('#lightboxTagBoxes').append(preview);
+        }
+        preview.style.left = `${(Math.min(startX, endX) - rect.left) / rect.width * 100}%`;
+        preview.style.top = `${(Math.min(startY, endY) - rect.top) / rect.height * 100}%`;
+        preview.style.width = `${Math.abs(endX - startX) / rect.width * 100}%`;
+        preview.style.height = `${Math.abs(endY - startY) / rect.height * 100}%`;
+        return;
+      }
       if (!editingPersonTag) return;
       const { tag, rect, resize, startX, startY, original } = editingPersonTag;
       const dx = Math.round((event.clientX - startX) * $('#lightboxImage').naturalWidth / rect.width);
@@ -1763,6 +1782,7 @@
       if (!drawingPersonTag) return;
       const { rect, startX, startY } = drawingPersonTag;
       drawingPersonTag = null;
+      $('#drawPreview')?.remove();
       const endX = Math.max(rect.left, Math.min(rect.right, event.clientX));
       const endY = Math.max(rect.top, Math.min(rect.bottom, event.clientY));
       const left = Math.min(startX, endX);
@@ -1790,6 +1810,12 @@
       } catch (error) {
         toast(`Could not save positional tag: ${String(error)}`);
       }
+    });
+    // The browser can take a pointer back mid-drag; drop the half-made box.
+    $('#lightboxImageWrap').addEventListener('pointercancel', () => {
+      drawingPersonTag = null;
+      $('#drawPreview')?.remove();
+      if (editingPersonTag) { editingPersonTag = null; loadPositionalTags(); }
     });
     $('#lightboxPlayers').addEventListener('click', async event => {
       if (!viewerState) return;

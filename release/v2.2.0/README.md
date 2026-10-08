@@ -30,12 +30,14 @@ The folder layout is unchanged: `<base>/YYYY-MM/<World Name>/VRChat_….png`.
 
 | File | Platform | SHA-256 |
 |---|---|---|
-| `VRChatOrganizer-2.2.0-x86_64.AppImage` | Linux x86_64 GUI | `bbaa1f05ec846e43be7f4835ab70f697d8a91d39605b4bd9edab9449899e4c2f` |
-| `VRChatOrganizer-2.2.0-windows-x86_64-cli.exe` | Windows x86_64 command-line tool | `1300fdb72b5f0b33ca46138942aa24fe693a82513c0b3644f8771cd2b527aeb7` |
+| `VRChatOrganizer-2.2.0-x86_64.AppImage` | Linux x86_64 GUI | `dea4ed49509c172c9d9f178bc870006c9800f871be5795539bd85fb0040e71f9` |
+| `VRChatOrganizer-2.2.0-windows-x86_64-portable.exe` | Windows x86_64 GUI, portable (no install) | `fb4feaa7a1e646c30a1598c9c0eb34739242b8ed434023cee7f2bfa659eacb38` |
+| `VRChat.Organizer_2.2.0_x64-setup.exe` | Windows x86_64 GUI installer | `3e911806e95a12763cf2146ea3cdb0c06818a71aa3ffcc6021a53ff78d451e9d` |
+| `VRChat.Organizer_2.2.0_x64_en-US.msi` | Windows x86_64 GUI installer (MSI) | `bd239f494c582a0642ff4b3d60d2d2ebd1ea3f1975953650b2fc8abbeef9c28b` |
+| `VRChatOrganizer-2.2.0-windows-x86_64-cli.exe` | Windows x86_64 command-line tool | `b22a47e90ec9f40ebdafe1e3ababfbdf56d1188ff72c158feca7518a9f960c30` |
 
-The Windows `-cli.exe` is the command-line organizer cross-compiled from Linux.
-The Windows GUI (portable exe and installers) is built and attached by the
-release workflow.
+On Windows, most people want the installer or the portable exe; the
+`-cli.exe` is the command-line organizer only.
 
 Verify downloads with:
 

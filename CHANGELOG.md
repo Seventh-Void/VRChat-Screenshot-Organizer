@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1 - 2026-10-08
+
+- **Fixed drawing person boxes:** dragging on the photo dragged the image
+  itself, so no box was drawn or saved. The box now follows the pointer while
+  you draw, and existing boxes can be moved and resized in draw mode too.
+
 ## 2.2.0 - 2026-10-07
 
 - **Removed avatar AI.** Recognition was unreliable (avatars change constantly);

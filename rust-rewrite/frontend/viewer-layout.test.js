@@ -69,7 +69,7 @@ async function showFixture(page, width, height) {
     await page.addInitScript(() => {
       localStorage.setItem('vrchat-organizer-onboarding-complete', 'true');
       window.__TAURI__ = {
-        core: { invoke: async cmd => (cmd === 'get_library_root' || cmd === 'get_default_path' ? '/library' : null), convertFileSrc: value => value },
+        core: { invoke: async (cmd, args) => window.__invokeOverride?.(cmd, args) ?? (cmd === 'get_library_root' || cmd === 'get_default_path' ? '/library' : null), convertFileSrc: value => value },
         event: { listen: async () => () => {} }
       };
     });
@@ -90,6 +90,38 @@ async function showFixture(page, width, height) {
     await page.setViewportSize({ width: 860, height: 620 });
     await page.waitForTimeout(100);
     assertGeometry(await measure(page), 'resize 1280x720 -> 860x620', [860, 620]);
+    cases += 1;
+
+    // Draw mode: dragging must draw (not drag the <img>), show a live box,
+    // ask for a name on release, and still allow resizing existing boxes.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => {
+      const tag = { id: 7, personName: 'Nova', x: 700, y: 300, width: 60, height: 60, imageWidth: 1600, imageHeight: 900 };
+      window.__invokeOverride = (cmd, args) => cmd === 'get_positional_person_tags' ? [tag]
+        : cmd === 'update_positional_person_tag_command' ? { ...tag, ...args, id: 7 } : undefined;
+      document.addEventListener('dragstart', () => { window.__dragstarts = (window.__dragstarts || 0) + 1; }, true);
+    });
+    await showFixture(page, 1600, 900);
+    await page.waitForSelector('[data-box-person]');
+    await page.click('#drawPersonTag');
+    const existing = await page.locator('[data-box-person]').boundingBox();
+    await page.mouse.move(existing.x + existing.width - 2, existing.y + existing.height - 2);
+    await page.mouse.down();
+    await page.mouse.move(existing.x + existing.width + 60, existing.y + existing.height + 40, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    const resized = await page.locator('[data-box-person]').boundingBox();
+    assert(resized.width > existing.width + 40, 'existing box resizes in draw mode');
+    const image = await page.locator('#lightboxImage').boundingBox();
+    await page.mouse.move(image.x + 100, image.y + 80);
+    await page.mouse.down();
+    await page.mouse.move(image.x + 300, image.y + 230, { steps: 5 });
+    const preview = await page.locator('#drawPreview').boundingBox();
+    assert(preview && Math.abs(preview.width - 200) <= 2, 'live box follows the pointer');
+    await page.mouse.up();
+    await page.waitForSelector('#askDialog[open]');
+    assert.equal(await page.evaluate(() => window.__dragstarts || 0), 0, 'image must not start a native drag');
+    assert.equal(await page.locator('#drawPreview').count(), 0, 'live box removed on release');
     cases += 1;
     assert.deepEqual(pageErrors, [], 'page errors');
     console.log(`viewer layout: ${cases} cases passed, 0 failed`);

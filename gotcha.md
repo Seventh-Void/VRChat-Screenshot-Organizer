@@ -58,6 +58,7 @@ Traps found hard way. Add new at end of right section; keep each few lines with 
 - Class setting `display` on `<dialog>` overrides UA hidden state — keep `dialog:not([open]) { display: none !important }`.
 - Escape on modal fires `cancel`, closes natively — app state (e.g. `viewerState`) needs `cancel` listener routing to app close function.
 - jsdom 24 has `HTMLDialogElement` but no `showModal()`/`close()` — stub in tests.
+- `<img>` is natively draggable: pointer-drag on it fires `dragstart` → `pointercancel`, no `pointerup` (box drawing silently died, ghost image followed cursor). `#lightboxImage` has `draggable="false"`; keep it. App captures `__TAURI__.core.invoke` at boot — tests swap behaviour via `window.__invokeOverride`, not by replacing `invoke`.
 - `prompt()`/`confirm()` gone; use in-app `ask({title, message, value, confirmLabel})` dialog, re-check after `await` that viewer still shows same photo.
 
 ## Shell scripts / CI
