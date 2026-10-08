@@ -1,9 +1,8 @@
 #!/bin/bash
 # Build VRChat Organizer as an AppImage
-# Requires: cargo and appimagetool installed
+# Requires: cargo, sha256sum and appimagetool on PATH
 
-set -e
-set -u
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -11,6 +10,7 @@ cd "$SCRIPT_DIR"
 echo "=== Building VRChat Organizer AppImage ==="
 command -v cargo >/dev/null || { echo "cargo is required" >&2; exit 1; }
 command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
+command -v appimagetool >/dev/null || { echo "appimagetool is required to create a release AppImage" >&2; exit 1; }
 
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
 [ -n "$VERSION" ] || { echo "Unable to determine application version" >&2; exit 1; }
@@ -59,23 +59,8 @@ ln -sf "usr/share/icons/hicolor/256x256/apps/vrchat-organizer.png" "$APPDIR/vrch
 APPIMAGE_NAME="VRChatOrganizer-${VERSION}-x86_64.AppImage"
 echo ">>> Building AppImage as: ${APPIMAGE_NAME}..."
 
-# Locate appimagetool — try PATH first, then common locations
-APPIMAGETOOL=""
-if command -v appimagetool &> /dev/null; then
-  APPIMAGETOOL="appimagetool"
-elif [ -f /tmp/appimagetool ]; then
-  APPIMAGETOOL="/tmp/appimagetool"
-elif [ -f /usr/bin/appimagetool ]; then
-  APPIMAGETOOL="/usr/bin/appimagetool"
-fi
-
-if [ -n "$APPIMAGETOOL" ]; then
-  "$APPIMAGETOOL" "$APPDIR" "${RELEASE_DIR}/${APPIMAGE_NAME}"
-  echo "✅ AppImage created at: ${RELEASE_DIR}/${APPIMAGE_NAME}"
-else
-  echo "appimagetool is required to create a release AppImage." >&2
-  exit 1
-fi
+appimagetool "$APPDIR" "${RELEASE_DIR}/${APPIMAGE_NAME}"
+echo "✅ AppImage created at: ${RELEASE_DIR}/${APPIMAGE_NAME}"
 
 test -s "${RELEASE_DIR}/${APPIMAGE_NAME}" || {
   echo "AppImage build did not produce ${RELEASE_DIR}/${APPIMAGE_NAME}" >&2

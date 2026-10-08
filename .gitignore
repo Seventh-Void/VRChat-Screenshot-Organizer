@@ -9,6 +9,8 @@
 # Build artifacts
 rust-rewrite/target/
 rust-rewrite/src-tauri/gen/
+rust-rewrite/node_modules/
+.venv/
 *.AppImage
 VRChatOrganizer.AppDir/
 *.msi
@@ -20,3 +22,6 @@ release/*/*
 
 # Logs
 *.log
+
+# Leftover AI models (unused since 2.2.0)
+rust-rewrite/resources/ai/

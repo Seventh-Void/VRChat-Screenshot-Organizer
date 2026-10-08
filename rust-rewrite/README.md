@@ -21,13 +21,20 @@ Metadata (world name, software) is extracted **without any external dependencies
   - Tag 305 (Software) — Creator software name
 - **PNG files** — Manually parses PNG text chunks at the byte level:
   - `tEXt`, `zTXt` (zlib-compressed), `iTXt` (UTF-8) chunks
-  - Keywords: `Description`, `Comment` — JSON containing world metadata
+  - Keywords: `Description`, `Comment` — VRCX JSON with world name and players
+  - Keyword `XML:com.adobe.xmp` — VRChat's own XMP (`vrc:WorldDisplayName`);
+    used when VRCX data is missing. VRChat's lookalike punctuation (`｜`, `․`,
+    `˸` …) is mapped back so both sources pick the same world folder
   - Keywords: `Software`, `Creator Tool` — software name
   - `VRChat Organizer Participants` — names added from the image viewer
 - **WebP** — Dimensions only (no EXIF/text chunk metadata supported yet)
 
-When a screenshot is open in the viewer, right-click the image to search for a
-player and save an explicit in-frame tag. World metadata participants remain
+When a screenshot is open in the viewer, use **Draw person box** to draw a box
+around an avatar and name it, picking from the players VRChat recorded in that
+photo's metadata (or typing a name). Boxes can be moved, resized, renamed
+through a new tag, and deleted from the viewer panel. The box coordinates are
+stored in a local database and restored whenever the screenshot is opened.
+World metadata participants remain
 available as general capture metadata, while the People view and tagged count
 use only these explicit image tags. Tags are stored separately in
 `.vrchat-organizer-tags.json` in the selected screenshot folder, keyed by a
@@ -53,6 +60,13 @@ copies represent the same screenshot). If a PNG is edited and re-saved, its
 fingerprint changes and the edited image starts with no tags. The SQLite cache
 stores the fingerprint alongside each photo's path, size, and modification
 time, so unchanged files do not need to be fingerprinted again.
+
+## People
+
+People are tagged by hand; there is no automatic recognition and no AI model.
+The People view lists everyone you have tagged, with their photos, worlds and
+timeline, and is searchable and sortable. Box tags live in a small SQLite
+database under the platform app-data directory and never leave the machine.
 
 ## Library classification
 
@@ -161,7 +175,7 @@ cd rust-rewrite
 
 The script fails fast when a required tool is missing, embeds the desktop entry,
 AppStream metadata and icon, and writes the versioned result to
-`release/v2.1.0/` (with the version read from Cargo metadata).
+`release/v2.2.0/` (with the version read from Cargo metadata).
 It rebuilds both artifacts and fails if either one cannot be produced.
 The AppImage can be launched on both X11 and Wayland through WebKitGTK.
 
@@ -171,7 +185,7 @@ The Windows cross-compilation helper uses the same versioned release directory:
 ./build-windows.sh
 ```
 
-It produces `release/v2.1.0/VRChatOrganizer-2.1.0-windows-x86_64.exe` and
+It produces `release/v2.2.0/VRChatOrganizer-2.2.0-windows-x86_64-cli.exe` and
 updates `SHA256SUMS` for all generated release binaries.
 This is the standalone Windows CLI executable; the Tauri GUI executable and
 NSIS/MSI installers must be built natively on Windows or by the Windows CI

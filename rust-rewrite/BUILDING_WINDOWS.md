@@ -37,7 +37,7 @@ cargo build --release -p desktop --target x86_64-pc-windows-gnu
 ```
 
 The helper copies the standalone executable to
-`release/v2.1.0/VRChatOrganizer-2.1.0-windows-x86_64.exe`, ready to upload as a
+`release/v2.2.0/VRChatOrganizer-2.2.0-windows-x86_64-cli.exe`, ready to upload as a
 release artifact.
 
 > ⚠️ **Limitation:** The Tauri GUI app (`-p app`) cannot be cross-compiled from Linux because it requires native Windows WebView2. For the full GUI app on Windows, build natively on Windows (Option 1) or use GitHub Actions.
@@ -51,7 +51,7 @@ release artifact.
 cd rust-rewrite
 
 # 2. Install the Tauri CLI
-cargo install tauri-cli --version '^2'
+cargo install tauri-cli --version =2.11.4 --locked
 
 # 3. Build the portable GUI executable
 cargo tauri build --bundles none
@@ -61,7 +61,7 @@ cargo tauri build --bundles nsis,msi
 ```
 
 The native Cargo output is `target/release/app.exe`. The release workflow
-renames it to `vrchat-organizer-2.1.0-portable.exe`. Installers are written to
+renames it to `VRChatOrganizer-2.2.0-windows-x86_64-portable.exe`. Installers are written to
 `target/release/bundle/nsis/` and `target/release/bundle/msi/`.
 
 ### Option 2: CLI Binary Only (cross-compile from Linux)
@@ -75,19 +75,20 @@ cargo build --release -p desktop --target x86_64-pc-windows-gnu
 
 The output will be at `target/x86_64-pc-windows-gnu/release/desktop.exe`.
 
-For the normal full release build, run `./build-appimage.sh` from
-`rust-rewrite`. It rebuilds the AppImage and Windows CLI executable together,
-then writes their checksums. The command fails if either artifact is missing.
+For the normal full release build, run `./build-appimage.sh` and then
+`./build-windows.sh` from `rust-rewrite`; the second script writes
+`SHA256SUMS` for every artifact in the release directory. Each command fails if
+its artifact cannot be produced.
 
 ### Option 3: Automated via GitHub Actions (easiest!)
 
 Push a tag to GitHub and the [release workflow](../.github/workflows/release.yml) will automatically build:
 - **AppImage** (Linux)
 - **desktop.exe** (Windows CLI, cross-compiled from Linux runner)
-- **app.exe** (Windows GUI source binary, built on Windows runner)
+- **app.exe** (portable Windows GUI, built on Windows runner)
 
-No local builds needed. The workflow publishes the AppImage, portable Windows
-executable, NSIS installer, and MSI when a GitHub release is published.
+No local builds needed. The workflow publishes the AppImage, Windows CLI and
+portable executables, NSIS installer, and MSI when a GitHub release is published.
 
 ## Creating an Installer
 

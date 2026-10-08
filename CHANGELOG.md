@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.2.0 - 2026-10-07
+
+- **Removed avatar AI.** Recognition was unreliable (avatars change constantly);
+  people are now tagged by drawing a box and picking a name from the
+  screenshot's player list. Drawn boxes and their pictures are kept; old AI data
+  is cleaned up on first launch. The AppImage shrinks from 522 MB to about 7 MB.
+- **Reads VRChat's own metadata:** screenshots without VRCX data are now
+  organized by the world name VRChat writes itself (XMP), into the same
+  folder VRCX-tagged photos of that world use.
+- **Fail-safe organizing:** moves never overwrite a file, anything that can't be
+  organized is left untouched, and a move whose undo entry can't be written is
+  rolled back. Undo never overwrites and keeps unreadable log lines.
+- **Faster and lighter:** library scans ~20× faster, organizing 5,000 photos
+  0.2 s instead of 4.7 s with ~1000× less disk writing; no full rescan per new
+  screenshot; idle CPU reduced (process check, polling paused when hidden).
+- **Security:** the screenshot folder can only be chosen from the native picker
+  or auto-detect, and the app can only read that folder; content security
+  policy enabled; crafted images can no longer exhaust memory; symlinks in
+  shared folders can't redirect writes; world names can't collide with
+  month/Prints/thumbnail folders.
+- **UI:** consistent fonts, spacing and colours; themes now apply everywhere;
+  more readable secondary text; keyboard focus and Escape work in all dialogs;
+  in-app dialogs replace browser pop-ups; layout fixed at the minimum window
+  size; notifications no longer hidden behind open panels.
+- Fixed People profiles, tag search highlighting the wrong name, and several
+  watcher/stop-start and undo edge cases.
+- Release builds are smaller (LTO, stripped); release tooling is pinned and
+  hash-verified. The Windows command-line build is now named `*-cli.exe`.
+
 ## 2.1.0 - 2026-09-20
 
 - Added explicit image person tags separate from world participant metadata.
@@ -23,3 +52,6 @@ The first public release of the Rust/Tauri rewrite.
 - Added the standalone Rust CLI for scripted and headless organization.
 - Added PNG and JPEG metadata extraction for VRChat world information.
 - Added Linux AppImage packaging and Windows build workflows.
+- Bundled offline avatar-recognition model assets into the application and
+  added explicit model-health reporting with graceful recognition disablement
+  when assets are unavailable.

@@ -4,6 +4,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -11,10 +14,12 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Read application version
         id: version
@@ -32,18 +37,23 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Install appimagetool
+      - name: Install appimagetool (pinned + verified)
         run: |
-          sudo wget -O /usr/local/bin/appimagetool \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          sudo chmod +x /usr/local/bin/appimagetool
+          curl -L --fail --proto '=https' --proto-redir '=https' -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c -
+          sudo install -m 0755 appimagetool /usr/local/bin/appimagetool
+          rm appimagetool
 
       - name: Build Tauri App & CLI + Package AppImage
         run: ./build-appimage.sh
+        env:
+          # Runners lack FUSE; appimagetool unpacks itself instead.
+          APPIMAGE_EXTRACT_AND_RUN: 1
         working-directory: ./rust-rewrite
 
       - name: Upload AppImage to Release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./release/v${{ steps.version.outputs.version }}/VRChatOrganizer-*.AppImage
@@ -54,11 +64,12 @@ jobs:
   build-windows:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust (with Windows target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-gnu
 
       - name: Read application version
@@ -74,20 +85,23 @@ jobs:
         working-directory: ./rust-rewrite
 
       - name: Upload Windows EXE to Release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./release/v${{ steps.version.outputs.version }}/VRChatOrganizer-*-windows-x86_64.exe
+          file: ./release/v${{ steps.version.outputs.version }}/VRChatOrganizer-*-windows-x86_64-cli.exe
           tag: ${{ github.ref }}
+          file_glob: true
           overwrite: true
 
   build-windows-tauri:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Read application version
         id: version
@@ -96,7 +110,7 @@ jobs:
 
       - name: Install Tauri dependencies (WebView2 is pre-installed)
         run: |
-          cargo install tauri-cli --version "^2"
+          cargo install tauri-cli --version =2.11.4 --locked
 
       - name: Build portable executable and installers
         shell: pwsh
@@ -110,15 +124,16 @@ jobs:
         working-directory: ./rust-rewrite
 
       - name: Upload portable Windows executable
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./release/v${{ steps.version.outputs.version }}/VRChatOrganizer-*-portable.exe
           tag: ${{ github.ref }}
+          file_glob: true
           overwrite: true
 
       - name: Upload Windows installers to Release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./release/v${{ steps.version.outputs.version }}/*-setup.exe
@@ -127,7 +142,7 @@ jobs:
           overwrite: true
 
       - name: Upload MSI installer to Release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./release/v${{ steps.version.outputs.version }}/*.msi

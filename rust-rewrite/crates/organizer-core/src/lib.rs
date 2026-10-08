@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::TimeZone;
-use fast_image_resize::{images::Image as ResizeImage, pixels::PixelType, Resizer};
+use fast_image_resize::{
+    images::{Image as ResizeImage, ImageRef},
+    pixels::PixelType,
+    ResizeOptions, Resizer,
+};
 use flate2::read::ZlibDecoder;
 use rayon::prelude::*;
 use regex::Regex;
@@ -10,10 +14,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock, TryLockError};
+use std::sync::{Mutex, OnceLock, PoisonError, TryLockError};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
@@ -191,41 +195,459 @@ pub struct LibraryWorld {
     pub last_capture: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarPerson {
+    pub id: i64,
+    pub display_name: String,
+    pub thumbnail_path: Option<String>,
+    pub screenshot_count: u64,
+    pub last_seen: Option<u64>,
+    pub favourite_world: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarPersonPhoto {
+    pub path: String,
+    pub crop_path: String,
+    pub world_name: Option<String>,
+    pub captured_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PositionalPersonTag {
+    pub id: i64,
+    pub screenshot_path: String,
+    pub person_name: String,
+    pub crop_path: String,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub world_name: Option<String>,
+    pub captured_at: Option<u64>,
+    pub confidence: f32,
+}
+
+fn crops_dir(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("avatar-crops")
+}
+
+/// People database: manually drawn person boxes only. Version 2 removed the
+/// old AI recognition tables; their crops are deleted, drawn-box crops
+/// (`manual-*.jpg`) are kept.
+fn recognition_schema(connection: &mut Connection, db_path: &Path) -> Result<()> {
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version >= 2 {
+        return Ok(());
+    }
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS avatar_people (
+             id INTEGER PRIMARY KEY,
+             display_name TEXT NOT NULL UNIQUE,
+             thumbnail_path TEXT,
+             aliases TEXT NOT NULL DEFAULT '[]',
+             created_at INTEGER NOT NULL,
+             last_seen INTEGER,
+             confidence REAL NOT NULL DEFAULT 0
+         );
+         CREATE TABLE IF NOT EXISTS positional_person_tags (
+             id INTEGER PRIMARY KEY,
+             screenshot_path TEXT NOT NULL,
+             person_name TEXT NOT NULL,
+             crop_path TEXT NOT NULL,
+             x INTEGER NOT NULL,
+             y INTEGER NOT NULL,
+             width INTEGER NOT NULL,
+             height INTEGER NOT NULL,
+             image_width INTEGER NOT NULL,
+             image_height INTEGER NOT NULL,
+             world_name TEXT,
+             captured_at INTEGER,
+             confidence REAL NOT NULL DEFAULT 1,
+             created_at INTEGER NOT NULL,
+             UNIQUE(screenshot_path, person_name, x, y, width, height)
+         );
+         CREATE INDEX IF NOT EXISTS idx_positional_tags_screenshot ON positional_person_tags(screenshot_path);
+         CREATE INDEX IF NOT EXISTS idx_positional_tags_person ON positional_person_tags(person_name);
+         DROP TABLE IF EXISTS avatar_samples;
+         DROP TABLE IF EXISTS avatar_detections;
+         DROP TABLE IF EXISTS avatar_scan_cache;
+         DROP TABLE IF EXISTS person_avatar_links;
+         DROP TABLE IF EXISTS avatar_profiles;
+         DROP TABLE IF EXISTS recognition_settings;
+         DELETE FROM avatar_people
+             WHERE display_name NOT IN (SELECT person_name FROM positional_person_tags);
+         PRAGMA user_version = 2;",
+    )?;
+    transaction.commit()?;
+    let crops = crops_dir(db_path);
+    if refuse_symlink(&crops).is_ok() {
+        for entry in fs::read_dir(crops).into_iter().flatten().flatten() {
+            let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+            let manual = entry.file_name().to_string_lossy().starts_with("manual-");
+            if is_file && !manual {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recognition_connection(db_path: &Path) -> Result<Connection> {
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut connection = Connection::open(db_path)?;
+    connection.pragma_update(None, "foreign_keys", true)?;
+    recognition_schema(&mut connection, db_path)?;
+    Ok(connection)
+}
+
+/// Decode with size limits so a crafted image cannot exhaust memory.
+fn decode_image(path: &Path) -> Result<image::DynamicImage> {
+    let mut reader = image::ImageReader::open(path)?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(256 << 20);
+    reader.limits(limits);
+    Ok(reader.decode()?)
+}
+
+/// Resize `rgb` (or the `crop` region of it) to exactly `width`×`height`.
+fn resize_rgb(
+    rgb: &image::RgbImage,
+    crop: Option<(u32, u32, u32, u32)>,
+    width: u32,
+    height: u32,
+) -> Result<image::RgbImage> {
+    let source = ImageRef::new(rgb.width(), rgb.height(), rgb.as_raw(), PixelType::U8x3)?;
+    let mut destination = ResizeImage::new(width, height, PixelType::U8x3);
+    let options =
+        crop.map(|(x, y, w, h)| ResizeOptions::new().crop(x as f64, y as f64, w as f64, h as f64));
+    Resizer::new().resize(&source, &mut destination, options.as_ref())?;
+    image::RgbImage::from_raw(width, height, destination.into_vec())
+        .context("resize returned an invalid buffer")
+}
+
+/// Save the `(x, y, width, height)` region scaled to fit 320×420.
+fn write_avatar_crop(
+    rgb: &image::RgbImage,
+    bounds: (u32, u32, u32, u32),
+    path: &Path,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        refuse_symlink(parent)?;
+        fs::create_dir_all(parent)?;
+    }
+    let scale = (320.0 / bounds.2 as f32).min(420.0 / bounds.3 as f32);
+    let width = ((bounds.2 as f32 * scale).round() as u32).max(1);
+    let height = ((bounds.3 as f32 * scale).round() as u32).max(1);
+    resize_rgb(rgb, Some(bounds), width, height)?.save(path)?;
+    Ok(())
+}
+
+/// Everyone with at least one drawn person box.
+pub fn avatar_people(db_path: &Path) -> Result<Vec<AvatarPerson>> {
+    let connection = recognition_connection(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT p.id,p.display_name,
+                (SELECT crop_path FROM positional_person_tags WHERE person_name=p.display_name
+                 ORDER BY created_at DESC LIMIT 1),
+                (SELECT COUNT(DISTINCT screenshot_path) FROM positional_person_tags
+                 WHERE person_name=p.display_name),
+                (SELECT MAX(captured_at) FROM positional_person_tags WHERE person_name=p.display_name),
+                (SELECT world_name FROM positional_person_tags
+                 WHERE person_name=p.display_name AND world_name IS NOT NULL
+                 GROUP BY world_name ORDER BY COUNT(*) DESC LIMIT 1) AS favourite_world
+         FROM avatar_people p
+         WHERE EXISTS (SELECT 1 FROM positional_person_tags WHERE person_name=p.display_name)
+         ORDER BY 5 DESC, p.display_name",
+    )?;
+    let result = statement
+        .query_map([], |row| {
+            Ok(AvatarPerson {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                thumbnail_path: row.get(2)?,
+                screenshot_count: row.get::<_, i64>(3)? as u64,
+                last_seen: row.get(4)?,
+                favourite_world: row.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(result)
+}
+
+pub fn avatar_person_photos(db_path: &Path, person_id: i64) -> Result<Vec<AvatarPersonPhoto>> {
+    let connection = recognition_connection(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT screenshot_path,crop_path,world_name,captured_at
+         FROM positional_person_tags
+         WHERE person_name=(SELECT display_name FROM avatar_people WHERE id=?)
+         ORDER BY captured_at DESC, screenshot_path",
+    )?;
+    let photos = statement
+        .query_map([person_id], |row| {
+            Ok(AvatarPersonPhoto {
+                path: row.get(0)?,
+                crop_path: row.get(1)?,
+                world_name: row.get(2)?,
+                captured_at: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(photos)
+}
+
+fn manual_crop_path(
+    db_path: &Path,
+    screenshot_path: &Path,
+    bounds: (u32, u32, u32, u32),
+) -> PathBuf {
+    let cache = crops_dir(db_path);
+    let mut hasher = Sha256::new();
+    hasher.update(screenshot_path.to_string_lossy().as_bytes());
+    hasher.update(bounds.0.to_le_bytes());
+    hasher.update(bounds.1.to_le_bytes());
+    hasher.update(bounds.2.to_le_bytes());
+    hasher.update(bounds.3.to_le_bytes());
+    cache.join(format!("manual-{:x}.jpg", hasher.finalize()))
+}
+
+pub fn positional_person_tags(
+    db_path: &Path,
+    screenshot_path: &Path,
+) -> Result<Vec<PositionalPersonTag>> {
+    let connection = recognition_connection(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT id,screenshot_path,person_name,crop_path,x,y,width,height,image_width,image_height,
+                world_name,captured_at,confidence
+         FROM positional_person_tags
+         WHERE screenshot_path=?
+         ORDER BY id",
+    )?;
+    let tags = statement
+        .query_map([screenshot_path.to_string_lossy().to_string()], |row| {
+            Ok(PositionalPersonTag {
+                id: row.get(0)?,
+                screenshot_path: row.get(1)?,
+                person_name: row.get(2)?,
+                crop_path: row.get(3)?,
+                x: row.get::<_, i64>(4)? as u32,
+                y: row.get::<_, i64>(5)? as u32,
+                width: row.get::<_, i64>(6)? as u32,
+                height: row.get::<_, i64>(7)? as u32,
+                image_width: row.get::<_, i64>(8)? as u32,
+                image_height: row.get::<_, i64>(9)? as u32,
+                world_name: row.get(10)?,
+                captured_at: row.get(11)?,
+                confidence: row.get(12)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(tags)
+}
+
+pub fn save_positional_person_tag(
+    db_path: &Path,
+    screenshot_path: &Path,
+    person_name: &str,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<PositionalPersonTag> {
+    let person_name = person_name.trim();
+    if person_name.is_empty() || person_name.chars().count() > 80 {
+        anyhow::bail!("person name must be 1-80 characters");
+    }
+    if width == 0 || height == 0 {
+        anyhow::bail!("person bounding box must have a size");
+    }
+    let image = decode_image(screenshot_path)
+        .with_context(|| format!("failed to decode screenshot {}", screenshot_path.display()))?
+        .into_rgb8();
+    let (image_width, image_height) = image.dimensions();
+    if x >= image_width
+        || y >= image_height
+        || width > image_width.saturating_sub(x)
+        || height > image_height.saturating_sub(y)
+    {
+        anyhow::bail!("person bounding box is outside the screenshot");
+    }
+
+    let meta = extract_image_meta(screenshot_path)?;
+    let crop_path = manual_crop_path(db_path, screenshot_path, (x, y, width, height));
+    write_avatar_crop(&image, (x, y, width, height), &crop_path)?;
+
+    let connection = recognition_connection(db_path)?;
+    connection.execute(
+        "INSERT INTO avatar_people(display_name,created_at,last_seen,confidence)
+         VALUES(?,?,?,1)
+         ON CONFLICT(display_name) DO UPDATE SET last_seen=excluded.last_seen,
+         confidence=MAX(avatar_people.confidence,excluded.confidence)",
+        params![
+            person_name,
+            chrono::Utc::now().timestamp(),
+            meta.captured_at
+        ],
+    )?;
+    connection.execute(
+        "INSERT INTO positional_person_tags(
+             screenshot_path,person_name,crop_path,x,y,width,height,image_width,image_height,
+             world_name,captured_at,confidence,created_at
+         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(screenshot_path,person_name,x,y,width,height)
+         DO UPDATE SET crop_path=excluded.crop_path,world_name=excluded.world_name,
+             captured_at=excluded.captured_at,confidence=excluded.confidence",
+        params![
+            screenshot_path.to_string_lossy(),
+            person_name,
+            crop_path.to_string_lossy(),
+            x,
+            y,
+            width,
+            height,
+            image_width,
+            image_height,
+            meta.world_name,
+            meta.captured_at,
+            1.0_f32,
+            chrono::Utc::now().timestamp()
+        ],
+    )?;
+    let tag_id: i64 = connection.query_row(
+        "SELECT id FROM positional_person_tags
+         WHERE screenshot_path=? AND person_name=? AND x=? AND y=? AND width=? AND height=?",
+        params![
+            screenshot_path.to_string_lossy(),
+            person_name,
+            x,
+            y,
+            width,
+            height
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(PositionalPersonTag {
+        id: tag_id,
+        screenshot_path: screenshot_path.to_string_lossy().into_owned(),
+        person_name: person_name.to_owned(),
+        crop_path: crop_path.to_string_lossy().into_owned(),
+        x,
+        y,
+        width,
+        height,
+        image_width,
+        image_height,
+        world_name: meta.world_name,
+        captured_at: meta.captured_at,
+        confidence: 1.0,
+    })
+}
+
+pub fn delete_positional_person_tag(db_path: &Path, tag_id: i64) -> Result<()> {
+    let connection = recognition_connection(db_path)?;
+    let deleted = connection.execute("DELETE FROM positional_person_tags WHERE id=?", [tag_id])?;
+    if deleted == 0 {
+        anyhow::bail!("person tag does not exist");
+    }
+    Ok(())
+}
+
+pub fn update_positional_person_tag(
+    db_path: &Path,
+    tag_id: i64,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<PositionalPersonTag> {
+    let connection = recognition_connection(db_path)?;
+    let (screenshot_path, person_name): (String, String) = connection.query_row(
+        "SELECT screenshot_path,person_name FROM positional_person_tags WHERE id=?",
+        [tag_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    // Save first so a failed update never loses the existing tag.
+    let updated = save_positional_person_tag(
+        db_path,
+        Path::new(&screenshot_path),
+        &person_name,
+        x,
+        y,
+        width,
+        height,
+    )?;
+    if updated.id != tag_id {
+        connection.execute("DELETE FROM positional_person_tags WHERE id=?", [tag_id])?;
+    }
+    Ok(updated)
+}
+
 const TAG_STORE_FILE: &str = ".vrchat-organizer-tags.json";
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+const ORGANIZER_TAG_PREFIX: &[u8] = b"VRChat Organizer Participants\0";
+static TAG_STORE_LOCK: Mutex<()> = Mutex::new(());
+const MAX_PARTICIPANTS: usize = 256;
+
+fn is_valid_person_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty() && name.chars().count() <= 80
+}
 
 fn tag_store_path(base_path: &Path) -> PathBuf {
     base_path.join(TAG_STORE_FILE)
 }
 
+/// Tag-store key: SHA-256 of the PNG signature and every chunk up to and
+/// including IEND, minus the organizer's own participant tEXt chunk. Streams
+/// the file; the output must stay byte-identical or every stored tag is lost.
 fn normalized_png_fingerprint(path: &Path) -> Result<String> {
-    let data = fs::read(path)?;
-    if data.len() < 8 || data[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
+    let mut reader = BufReader::new(fs::File::open(path)?);
+    let length = reader.get_ref().metadata()?.len();
+    let mut signature = [0u8; 8];
+    if length < 8 || reader.read_exact(&mut signature).is_err() || signature != PNG_SIGNATURE {
         anyhow::bail!("person tagging currently supports PNG screenshots only");
     }
-    let mut normalized = data[..8].to_vec();
-    let mut offset = 8;
-    while offset + 12 <= data.len() {
-        let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-        let end = offset
-            .checked_add(12 + length)
-            .ok_or_else(|| anyhow::anyhow!("malformed PNG"))?;
-        if end > data.len() {
+    let mut hasher = Sha256::new();
+    hasher.update(signature);
+    let mut offset = 8_u64;
+    while offset + 12 <= length {
+        let mut header = [0u8; 8];
+        reader.read_exact(&mut header)?;
+        let chunk_len = u32::from_be_bytes(header[..4].try_into().unwrap()) as u64;
+        let end = offset + 12 + chunk_len;
+        if end > length {
             anyhow::bail!("malformed PNG: chunk exceeds file size");
         }
-        let chunk_type = &data[offset + 4..offset + 8];
-        let is_organizer_tag = chunk_type == b"tEXt"
-            && data[offset + 8..offset + 8 + length]
-                .starts_with(b"VRChat Organizer Participants\0");
-        if !is_organizer_tag {
-            normalized.extend_from_slice(&data[offset..end]);
+        let mut prefix = vec![0u8; chunk_len.min(ORGANIZER_TAG_PREFIX.len() as u64) as usize];
+        reader.read_exact(&mut prefix)?;
+        let rest = chunk_len + 4 - prefix.len() as u64;
+        if &header[4..] == b"tEXt" && prefix == ORGANIZER_TAG_PREFIX {
+            reader.seek_relative(rest as i64)?;
+        } else {
+            hasher.update(header);
+            hasher.update(&prefix);
+            if std::io::copy(&mut (&mut reader).take(rest), &mut hasher)? != rest {
+                anyhow::bail!("PNG changed while it was read");
+            }
         }
         offset = end;
-        if chunk_type == b"IEND" {
+        if &header[4..] == b"IEND" {
             break;
         }
     }
-    let mut hasher = Sha256::new();
-    hasher.update(normalized);
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -234,10 +656,20 @@ fn load_tag_store(base_path: &Path) -> Result<HashMap<String, Vec<String>>> {
     if !path.exists() {
         return Ok(HashMap::new());
     }
-    match serde_json::from_str(&fs::read_to_string(&path)?) {
-        Ok(store) => Ok(store),
+    match serde_json::from_str::<HashMap<String, Vec<String>>>(&fs::read_to_string(&path)?) {
+        Ok(mut store) => {
+            // Drop anything the app itself would never have written.
+            store.retain(|key, names| {
+                names.retain(|name| is_valid_person_name(name));
+                names.truncate(MAX_PARTICIPANTS);
+                key.len() == 64
+                    && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && !names.is_empty()
+            });
+            Ok(store)
+        }
         Err(error) => {
-            let backup = path.with_extension(format!("json.corrupt.{}", std::process::id()));
+            let backup = path.with_extension(format!("json.corrupt.{}", temp_suffix()));
             fs::rename(&path, &backup).with_context(|| {
                 format!(
                     "tag store is corrupt ({error}) and could not be backed up to {}",
@@ -254,11 +686,16 @@ fn load_tag_store(base_path: &Path) -> Result<HashMap<String, Vec<String>>> {
 }
 
 fn save_tag_store(base_path: &Path, store: &HashMap<String, Vec<String>>) -> Result<()> {
-    let path = tag_store_path(base_path);
-    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
-    fs::write(&temporary, serde_json::to_vec_pretty(store)?)?;
-    fs::rename(temporary, path)?;
-    Ok(())
+    write_atomic(
+        &tag_store_path(base_path),
+        &serde_json::to_vec_pretty(store)?,
+    )
+}
+
+fn lock_tag_store() -> std::sync::MutexGuard<'static, ()> {
+    TAG_STORE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 pub fn set_photo_tags(
@@ -267,6 +704,12 @@ pub fn set_photo_tags(
     participants: &[String],
 ) -> Result<Vec<String>> {
     let key = normalized_png_fingerprint(path)?;
+    let _guard = lock_tag_store();
+    store_photo_tags(base_path, key, participants)
+}
+
+/// Replace one photo's tags. Callers must hold `TAG_STORE_LOCK`.
+fn store_photo_tags(base_path: &Path, key: String, participants: &[String]) -> Result<Vec<String>> {
     let mut store = load_tag_store(base_path)?;
     let mut names = Vec::new();
     for participant in participants {
@@ -280,6 +723,9 @@ pub fn set_photo_tags(
         {
             names.push(name.to_owned());
         }
+    }
+    if names.len() > MAX_PARTICIPANTS {
+        anyhow::bail!("a photo can have at most {MAX_PARTICIPANTS} people");
     }
     if names.is_empty() {
         store.remove(&key);
@@ -296,15 +742,15 @@ pub fn tag_photo_participant_in_store(
     participant: &str,
 ) -> Result<Vec<String>> {
     let key = normalized_png_fingerprint(path)?;
-    let mut store = load_tag_store(base_path)?;
-    let mut names = store.remove(&key).unwrap_or_default();
+    let _guard = lock_tag_store();
+    let mut names = load_tag_store(base_path)?.remove(&key).unwrap_or_default();
     if !names
         .iter()
         .any(|existing| existing.eq_ignore_ascii_case(participant.trim()))
     {
         names.push(participant.trim().to_owned());
     }
-    set_photo_tags(base_path, path, &names)
+    store_photo_tags(base_path, key, &names)
 }
 
 fn ensure_cache_schema(connection: &Connection) -> Result<()> {
@@ -409,12 +855,13 @@ pub fn cached_library(
     if cached.is_empty() {
         return Ok(None);
     }
+    let roots = library_roots(base_path, scan_all_months)?;
     let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
     let mut unorganized = Vec::new();
-    for entry in cached
-        .into_values()
-        .filter(|entry| Path::new(&entry.photo.path).starts_with(base_path))
-    {
+    for entry in cached.into_values().filter(|entry| {
+        let photo_path = Path::new(&entry.photo.path);
+        photo_path.starts_with(base_path) && roots.iter().any(|root| photo_path.starts_with(root))
+    }) {
         let relative = Path::new(&entry.photo.path)
             .strip_prefix(base_path)
             .unwrap_or_else(|_| Path::new(""));
@@ -468,11 +915,18 @@ pub fn cached_library(
     Ok(Some(stats))
 }
 
+/// (world, photo, modified_secs, tag-store fingerprint) for one scanned file.
+type ScannedPhoto = (Option<String>, LibraryPhoto, u64, Option<String>);
+
+/// Write new or changed rows and drop rows for files that vanished from the
+/// roots just scanned (rows for other months/libraries are kept).
 fn save_cache(
     path: &Path,
-    candidates: &[(Option<String>, LibraryPhoto)],
-    files: &[(PathBuf, u64, u64, PathBuf)],
-    fingerprints: &HashMap<String, Option<String>>,
+    candidates: &[ScannedPhoto],
+    cached: &HashMap<String, CachedPhoto>,
+    roots: &[PathBuf],
+    base_path: &Path,
+    scan_all_months: bool,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -480,59 +934,60 @@ fn save_cache(
     let mut connection = Connection::open(path)?;
     ensure_cache_schema(&connection)?;
     let transaction = connection.transaction()?;
-    for (_, photo) in candidates {
-        let modified_secs = files
-            .iter()
-            .find(|(path, _, _, _)| path.to_string_lossy() == photo.path)
-            .map(|(_, _, modified, _)| *modified)
-            .unwrap_or_default();
-        transaction.execute(
-                "INSERT OR REPLACE INTO photos
-                 (path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,fingerprint,width,height,thumbnail_path)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![
+    {
+        let mut insert = transaction.prepare(
+            "INSERT OR REPLACE INTO photos
+             (path,size_bytes,modified_secs,world_name,captured_at,participants,tagged_participants,fingerprint,width,height,thumbnail_path)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        )?;
+        for (_, photo, modified_secs, fingerprint) in candidates {
+            let unchanged = cached.get(&photo.path).is_some_and(|entry| {
+                entry.size_bytes == photo.size_bytes
+                    && entry.modified_secs == *modified_secs
+                    && entry.fingerprint == *fingerprint
+                    && entry.photo.tagged_participants == photo.tagged_participants
+            });
+            if unchanged {
+                continue;
+            }
+            insert.execute(params![
                 photo.path,
                 photo.size_bytes as i64,
-                modified_secs as i64,
+                *modified_secs as i64,
                 photo.world_name,
                 photo.captured_at.map(|value| value as i64),
                 serde_json::to_string(&photo.participants)?,
                 serde_json::to_string(&photo.tagged_participants)?,
-                fingerprints.get(&photo.path).and_then(|value| value.clone()),
+                fingerprint,
                 photo.width as i64,
                 photo.height as i64,
                 photo.thumbnail_path,
-            ],
-        )?;
-    }
-    let paths: std::collections::HashSet<&str> = candidates
-        .iter()
-        .map(|(_, photo)| photo.path.as_str())
-        .collect();
-    let mut stale = transaction.prepare("SELECT path FROM photos")?;
-    let stale_paths: Vec<String> = stale
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<String>>>()?
-        .into_iter()
-        .filter(|path| !paths.contains(path.as_str()))
-        .collect();
-    drop(stale);
-    for stale_path in stale_paths {
-        transaction.execute("DELETE FROM photos WHERE path = ?1", [stale_path])?;
+            ])?;
+        }
+        let scanned: std::collections::HashSet<&str> = candidates
+            .iter()
+            .map(|(_, photo, _, _)| photo.path.as_str())
+            .collect();
+        let mut delete = transaction.prepare("DELETE FROM photos WHERE path = ?1")?;
+        for stale in cached
+            .keys()
+            .filter(|path| !scanned.contains(path.as_str()))
+        {
+            let stale_path = Path::new(stale);
+            let in_scanned_root = roots.iter().any(|root| {
+                if !scan_all_months && root == base_path {
+                    stale_path.parent() == Some(root.as_path())
+                } else {
+                    stale_path.starts_with(root)
+                }
+            });
+            if in_scanned_root {
+                delete.execute([stale])?;
+            }
+        }
     }
     transaction.commit()?;
     Ok(())
-}
-
-pub fn scan_library_details(base_path: &Path) -> Result<Vec<LibraryWorld>> {
-    scan_library_details_with_options(base_path, false)
-}
-
-pub fn scan_library_details_with_options(
-    base_path: &Path,
-    scan_all_months: bool,
-) -> Result<Vec<LibraryWorld>> {
-    Ok(scan_library_partition_with_options(base_path, scan_all_months, None)?.0)
 }
 
 fn scan_library_partition_with_options(
@@ -544,18 +999,18 @@ fn scan_library_partition_with_options(
         anyhow::bail!("path does not exist: {}", base_path.display());
     }
 
+    let scan_started = std::time::SystemTime::now();
     let roots = library_roots(base_path, scan_all_months)?;
     let cached = cache_path.map(load_cache).transpose()?.unwrap_or_default();
     let tag_store = load_tag_store(base_path)?;
-    let mut candidates = Vec::new();
     let mut files = Vec::new();
-    let mut fingerprints = HashMap::new();
-
-    for root in roots {
-        let walker = if !scan_all_months && root == *base_path {
-            WalkDir::new(&root).max_depth(1)
+    for root in &roots {
+        // Only the chosen library folder itself may be a symlink.
+        let walker = WalkDir::new(root).follow_root_links(root == base_path);
+        let walker = if !scan_all_months && root == base_path {
+            walker.max_depth(1)
         } else {
-            WalkDir::new(&root)
+            walker
         };
         for item in walker
             .into_iter()
@@ -564,120 +1019,112 @@ fn scan_library_partition_with_options(
             .filter(|item| is_image_path(item.path()))
             .filter(|item| !is_ignored_path(item.path(), base_path))
         {
-            let path = item.path().to_path_buf();
-            let metadata = item.metadata()?;
+            let Ok(metadata) = item.metadata() else {
+                continue;
+            };
             let modified_secs = metadata
                 .modified()
                 .ok()
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|duration| duration.as_secs())
                 .unwrap_or_default();
-            files.push((path, metadata.len(), modified_secs, root.clone()));
+            files.push((item.into_path(), metadata.len(), modified_secs, root));
         }
     }
-    let processed: Vec<_> = files
+    let candidates: Vec<ScannedPhoto> = files
         .par_iter()
         .map(|(path, size_bytes, modified_secs, root)| {
-            if let Some(cached) = cached.get(&path.to_string_lossy().into_owned()) {
-                if cached.size_bytes == *size_bytes && cached.modified_secs == *modified_secs {
-                    let mut photo = cached.photo.clone();
-                    let fingerprint = cached
-                        .fingerprint
-                        .clone()
-                        .or_else(|| normalized_png_fingerprint(path).ok());
-                    if let Some(key) = fingerprint.as_ref() {
-                        photo.tagged_participants = tag_store.get(key).cloned().unwrap_or_default();
-                    }
-                    return Ok((
-                        path.clone(),
-                        *size_bytes,
-                        *modified_secs,
-                        root.clone(),
-                        fingerprint,
-                        photo,
-                    ));
+            let hit = cached.get(path.to_string_lossy().as_ref()).filter(|entry| {
+                entry.size_bytes == *size_bytes && entry.modified_secs == *modified_secs
+            });
+            let (fingerprint, mut photo) = if let Some(entry) = hit {
+                let fingerprint = entry
+                    .fingerprint
+                    .clone()
+                    .or_else(|| normalized_png_fingerprint(path).ok());
+                let mut photo = entry.photo.clone();
+                if let Some(key) = fingerprint.as_ref() {
+                    photo.tagged_participants = tag_store.get(key).cloned().unwrap_or_default();
                 }
-            }
-            let metadata = extract_image_meta(path).ok();
-            let fingerprint = normalized_png_fingerprint(path).ok();
-            let filesystem_captured_at = Some(*modified_secs);
-            let captured_at = metadata
-                .as_ref()
-                .and_then(|meta| meta.captured_at)
-                .or(filesystem_captured_at);
-            if cancel_requested() {
-                anyhow::bail!("scan cancelled");
-            }
-            let mut photo = LibraryPhoto {
-                path: path.to_string_lossy().into_owned(),
-                thumbnail_path: String::new(),
-                captured_at,
-                world_name: metadata.as_ref().and_then(|meta| meta.world_name.clone()),
-                participants: metadata
-                    .as_ref()
-                    .map(|meta| meta.participants.clone())
-                    .unwrap_or_default(),
-                tagged_participants: metadata
-                    .as_ref()
-                    .map(|meta| meta.tagged_participants.clone())
-                    .unwrap_or_default(),
-                width: metadata.as_ref().map(|meta| meta.width).unwrap_or_default(),
-                height: metadata
-                    .as_ref()
-                    .map(|meta| meta.height)
-                    .unwrap_or_default(),
-                size_bytes: *size_bytes,
-            };
-            if let Some(key) = fingerprint.as_ref() {
-                if let Some(tags) = tag_store.get(key) {
+                (fingerprint, photo)
+            } else {
+                let metadata = extract_image_meta(path).ok();
+                let fingerprint = normalized_png_fingerprint(path).ok();
+                let mut photo = LibraryPhoto {
+                    path: path.to_string_lossy().into_owned(),
+                    thumbnail_path: String::new(),
+                    captured_at: metadata
+                        .as_ref()
+                        .and_then(|meta| meta.captured_at)
+                        .or(Some(*modified_secs)),
+                    world_name: metadata.as_ref().and_then(|meta| meta.world_name.clone()),
+                    participants: metadata
+                        .as_ref()
+                        .map(|meta| meta.participants.clone())
+                        .unwrap_or_default(),
+                    tagged_participants: metadata
+                        .as_ref()
+                        .map(|meta| meta.tagged_participants.clone())
+                        .unwrap_or_default(),
+                    width: metadata.as_ref().map(|meta| meta.width).unwrap_or_default(),
+                    height: metadata
+                        .as_ref()
+                        .map(|meta| meta.height)
+                        .unwrap_or_default(),
+                    size_bytes: *size_bytes,
+                };
+                if let Some(tags) = fingerprint.as_ref().and_then(|key| tag_store.get(key)) {
                     photo.tagged_participants = tags.clone();
                 }
+                (fingerprint, photo)
+            };
+            if photo.thumbnail_path.is_empty() {
+                photo.thumbnail_path = thumbnail_path_for(path, base_path, Some(*modified_secs))
+                    .to_string_lossy()
+                    .into_owned();
             }
-            Ok((
-                path.clone(),
-                *size_bytes,
-                *modified_secs,
-                root.clone(),
-                fingerprint,
-                photo,
-            ))
+            let relative = path.strip_prefix(root).unwrap_or(path);
+            let world = classify_world(relative, photo.world_name.as_deref(), scan_all_months, 2);
+            (world, photo, *modified_secs, fingerprint)
         })
-        .collect::<Result<Vec<_>>>()?;
-    for (path, size_bytes, modified_secs, root, fingerprint, mut photo) in processed {
-        if photo.thumbnail_path.is_empty() {
-            photo.thumbnail_path = thumbnail_path_for(&path, base_path, Some(modified_secs))
-                .to_string_lossy()
-                .into_owned();
+        .collect();
+
+    // Move tags still embedded in legacy PNG metadata into the tag store.
+    let legacy: Vec<(&String, &Vec<String>)> = candidates
+        .iter()
+        .filter_map(|(_, photo, _, fingerprint)| {
+            Some((fingerprint.as_ref()?, &photo.tagged_participants))
+        })
+        .filter(|(key, tags)| !tags.is_empty() && !tag_store.contains_key(*key))
+        .collect();
+    if !legacy.is_empty() {
+        let _guard = lock_tag_store();
+        let mut store = load_tag_store(base_path)?;
+        let before = store.len();
+        for (key, tags) in legacy {
+            store.entry(key.clone()).or_insert_with(|| tags.clone());
         }
-        let relative = path.strip_prefix(&root).unwrap_or(&path);
-        let world = classify_world(relative, photo.world_name.as_deref(), scan_all_months, 2);
-        if let Some(key) = fingerprint.as_ref() {
-            fingerprints.insert(photo.path.clone(), Some(key.clone()));
-        }
-        candidates.push((world, photo.clone()));
-        if let Some(cache_path) = cache_path {
-            // Cache writes are batched after classification below.
-            let _ = (cache_path, size_bytes, modified_secs);
-        }
-    }
-    let mut tag_store = load_tag_store(base_path)?;
-    for (_, photo) in &candidates {
-        if !photo.tagged_participants.is_empty() {
-            if let Some(Some(key)) = fingerprints.get(&photo.path) {
-                tag_store
-                    .entry(key.clone())
-                    .or_insert_with(|| photo.tagged_participants.clone());
-            }
+        if store.len() != before {
+            save_tag_store(base_path, &store)?;
         }
     }
-    save_tag_store(base_path, &tag_store)?;
     if let Some(cache_path) = cache_path {
-        save_cache(cache_path, &candidates, &files, &fingerprints)?;
+        save_cache(
+            cache_path,
+            &candidates,
+            &cached,
+            &roots,
+            base_path,
+            scan_all_months,
+        )?;
+    }
+    if scan_all_months {
+        remove_orphan_thumbnails(base_path, &candidates, scan_started);
     }
 
     let mut worlds: HashMap<String, Vec<LibraryPhoto>> = HashMap::new();
     let mut unorganized_photos = Vec::new();
-    for (world, photo) in candidates {
+    for (world, photo, _, _) in candidates {
         if let Some(world) = world {
             worlds.entry(world).or_default().push(photo);
         } else {
@@ -709,6 +1156,42 @@ fn scan_library_partition_with_options(
     Ok((result, unorganized_photos))
 }
 
+/// Delete cached thumbnails no scanned photo refers to any more (moved,
+/// edited or deleted photos). Only valid after a scan of every month.
+fn remove_orphan_thumbnails(
+    base_path: &Path,
+    candidates: &[ScannedPhoto],
+    scan_started: std::time::SystemTime,
+) {
+    let cache = base_path.join(THUMBNAIL_DIR);
+    if candidates.is_empty() || refuse_symlink(&cache).is_err() {
+        return;
+    }
+    let referenced: std::collections::HashSet<&std::ffi::OsStr> = candidates
+        .iter()
+        .filter_map(|(_, photo, _, _)| Path::new(&photo.thumbnail_path).file_name())
+        .collect();
+    let Ok(entries) = fs::read_dir(cache) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // Thumbnails written while the scan ran may belong to newer photos.
+        let older = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified < scan_started);
+        let path = entry.path();
+        if older
+            && path.extension().is_some_and(|extension| extension == "jpg")
+            && path
+                .file_name()
+                .is_some_and(|name| !referenced.contains(name))
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 fn library_roots(base_path: &Path, scan_all_months: bool) -> Result<Vec<PathBuf>> {
     let mut roots = Vec::new();
     for entry in fs::read_dir(base_path)? {
@@ -738,7 +1221,8 @@ fn library_roots(base_path: &Path, scan_all_months: bool) -> Result<Vec<PathBuf>
 
 fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result<PathBuf> {
     let target = thumbnail_path_for(path, base_path, modified);
-    let cache = base_path.join("vrchat-organizer-thumbnails");
+    let cache = base_path.join(THUMBNAIL_DIR);
+    refuse_symlink(&cache)?;
     fs::create_dir_all(&cache)?;
     if target
         .metadata()
@@ -748,28 +1232,15 @@ fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result
         return Ok(target);
     }
 
-    let thumbnail = match image::ImageReader::open(path)
-        .ok()
-        .and_then(|reader| reader.decode().ok())
-    {
+    let thumbnail = match decode_image(path).ok() {
         Some(image) => {
-            let rgb = image.to_rgb8();
+            let rgb = image.into_rgb8();
             let scale = (320.0 / rgb.width() as f32)
                 .min(320.0 / rgb.height() as f32)
                 .min(1.0);
             let width = ((rgb.width() as f32 * scale).round() as u32).max(1);
             let height = ((rgb.height() as f32 * scale).round() as u32).max(1);
-            let source = ResizeImage::from_vec_u8(
-                rgb.width(),
-                rgb.height(),
-                rgb.into_raw(),
-                PixelType::U8x3,
-            )?;
-            let mut destination = ResizeImage::new(width, height, PixelType::U8x3);
-            Resizer::new().resize(&source, &mut destination, None)?;
-            image::RgbImage::from_raw(width, height, destination.into_vec())
-                .map(image::DynamicImage::ImageRgb8)
-                .context("thumbnail resize returned an invalid buffer")?
+            image::DynamicImage::ImageRgb8(resize_rgb(&rgb, None, width, height)?)
         }
         None => image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             320,
@@ -777,13 +1248,19 @@ fn thumbnail_for(path: &Path, base_path: &Path, modified: Option<u64>) -> Result
             image::Rgb([32, 26, 48]),
         )),
     };
-    let temporary = target.with_extension("jpg.tmp");
-    let mut output = fs::File::create(&temporary)?;
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 75);
-    encoder.encode_image(&thumbnail)?;
-    output.sync_all()?;
-    fs::rename(temporary, &target)?;
-    Ok(target)
+    let temporary = target.with_extension(format!("jpg.tmp.{}", temp_suffix()));
+    let written = (|| -> Result<()> {
+        let mut output = fs::File::create(&temporary)?;
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 75)
+            .encode_image(&thumbnail)?;
+        output.sync_all()?;
+        fs::rename(&temporary, &target)?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written.map(|()| target)
 }
 
 pub fn generate_thumbnail(path: &Path, base_path: &Path) -> Result<PathBuf> {
@@ -795,6 +1272,8 @@ pub fn generate_thumbnail(path: &Path, base_path: &Path) -> Result<PathBuf> {
     thumbnail_for(path, base_path, modified)
 }
 
+const THUMBNAIL_DIR: &str = "vrchat-organizer-thumbnails";
+
 pub fn thumbnail_path_for(path: &Path, base_path: &Path, modified: Option<u64>) -> PathBuf {
     let cache = base_path.join("vrchat-organizer-thumbnails");
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -804,7 +1283,7 @@ pub fn thumbnail_path_for(path: &Path, base_path: &Path, modified: Option<u64>) 
     cache.join(format!("{:x}.jpg", hasher.finish()))
 }
 
-fn is_image_path(path: &Path) -> bool {
+pub fn is_image_path(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .map(|extension| {
@@ -816,7 +1295,7 @@ fn is_image_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_ignored_path(path: &Path, base_path: &Path) -> bool {
+pub fn is_ignored_path(path: &Path, base_path: &Path) -> bool {
     let relative = path.strip_prefix(base_path).unwrap_or(path);
     relative.components().any(|component| {
         let name = component.as_os_str().to_string_lossy();
@@ -888,10 +1367,7 @@ pub fn log_activity(base_path: &Path, entry: &ActivityEntry) -> Result<()> {
     if entries.len() > 500 {
         entries.drain(..entries.len() - 500);
     }
-    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
-    fs::write(&tmp, serde_json::to_string_pretty(&entries)?)?;
-    fs::rename(tmp, path)?;
-    Ok(())
+    write_atomic(&path, serde_json::to_string_pretty(&entries)?.as_bytes())
 }
 
 pub fn read_activity_log(base_path: &Path) -> Result<Vec<ActivityEntry>> {
@@ -903,98 +1379,208 @@ pub fn read_activity_log(base_path: &Path) -> Result<Vec<ActivityEntry>> {
         .with_context(|| format!("activity log is corrupt: {}", path.display()))
 }
 
-/// Log an undo entry to the undo JSON file in the base folder.
-/// Uses atomic write (temp file + rename) to prevent corruption on crash.
-pub fn log_undo_entry(base_path: &Path, entry: &UndoEntry) -> Result<()> {
-    let undo_path = base_path.join(".vrchat-organizer-undo.json");
-    let mut entries: Vec<UndoEntry> = if undo_path.exists() {
-        let data = fs::read_to_string(&undo_path)?;
-        serde_json::from_str(&data)
-            .with_context(|| format!("existing undo log is corrupt: {}", undo_path.display()))?
-    } else {
-        Vec::new()
-    };
-    entries.push(entry.clone());
-    let data = serde_json::to_string_pretty(&entries)?;
-    // Atomic write: write to temp file first, then rename to prevent partial writes
-    let tmp_path = base_path.join(format!(
-        ".vrchat-organizer-undo.json.tmp.{}",
-        std::process::id()
-    ));
-    fs::write(&tmp_path, data)?;
-    fs::rename(&tmp_path, &undo_path)?;
+const UNDO_FILE: &str = ".vrchat-organizer-undo.json";
+
+/// Unique suffix for temporary files written next to their destination.
+fn temp_suffix() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.as_nanos());
+    format!(
+        "{}.{nanos}{:04}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed) % 10_000
+    )
+}
+
+/// Refuse to write app files through a symlink planted in the library.
+fn refuse_symlink(path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        anyhow::bail!("refusing to write through symlink {}", path.display());
+    }
     Ok(())
 }
 
-/// Read the undo log from the base folder.
-pub fn read_undo_log(base_path: &Path) -> Result<Vec<UndoEntry>> {
-    let undo_path = base_path.join(".vrchat-organizer-undo.json");
+/// Create a brand-new file (never opens an existing file or symlink).
+fn create_new_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+/// Replace `path` with `data` via a fresh temp file + rename.
+fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    refuse_symlink(path)?;
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp.{}", temp_suffix()));
+    let tmp_path = path.with_file_name(name);
+    let written = create_new_file(&tmp_path)
+        .and_then(|mut file| file.write_all(data))
+        .and_then(|()| fs::rename(&tmp_path, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    Ok(written?)
+}
+
+/// Write the undo log as JSON Lines; `raw` lines (unparseable) are kept as-is.
+fn write_undo_log(undo_path: &Path, entries: &[UndoEntry], raw: &[String]) -> Result<()> {
+    let mut data = Vec::new();
+    for entry in entries {
+        serde_json::to_writer(&mut data, entry)?;
+        data.push(b'\n');
+    }
+    for line in raw {
+        data.extend_from_slice(line.as_bytes());
+        data.push(b'\n');
+    }
+    write_atomic(undo_path, &data)
+}
+
+/// Append one entry (a JSON line) to the undo log in the base folder. A
+/// legacy JSON-array log is converted to JSON Lines first.
+pub fn log_undo_entry(base_path: &Path, entry: &UndoEntry) -> Result<()> {
+    let undo_path = base_path.join(UNDO_FILE);
+    refuse_symlink(&undo_path)?;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(&undo_path)?;
+    let mut line = Vec::new();
+    if file.metadata()?.len() > 0 {
+        let mut byte = [0u8];
+        file.read_exact(&mut byte)?;
+        if byte[0] == b'[' {
+            drop(file);
+            write_undo_log(&undo_path, &read_undo_log(base_path)?, &[])?;
+            return log_undo_entry(base_path, entry);
+        }
+        // Never glue a new entry onto a line torn by a crash.
+        file.seek(std::io::SeekFrom::End(-1))?;
+        file.read_exact(&mut byte)?;
+        if byte[0] != b'\n' {
+            line.push(b'\n');
+        }
+    }
+    serde_json::to_writer(&mut line, entry)?;
+    line.push(b'\n');
+    file.write_all(&line)?;
+    Ok(())
+}
+
+/// Undo entries plus any unparseable (e.g. crash-torn) raw lines.
+fn read_undo_entries(base_path: &Path) -> Result<(Vec<UndoEntry>, Vec<String>)> {
+    let undo_path = base_path.join(UNDO_FILE);
     if !undo_path.exists() {
-        return Ok(Vec::new());
+        return Ok(Default::default());
     }
     let data = fs::read_to_string(&undo_path)?;
-    let entries = serde_json::from_str(&data)
-        .with_context(|| format!("undo log is corrupt: {}", undo_path.display()))?;
-    Ok(entries)
+    if data.trim_start().starts_with('[') {
+        let entries = serde_json::from_str(&data)
+            .with_context(|| format!("undo log is corrupt: {}", undo_path.display()))?;
+        return Ok((entries, Vec::new()));
+    }
+    let (mut entries, mut raw) = (Vec::new(), Vec::new());
+    for line in data.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str(line) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => raw.push(line.to_owned()),
+        }
+    }
+    Ok((entries, raw))
+}
+
+/// Read the undo log (JSON Lines, or a legacy JSON array) from the base folder.
+pub fn read_undo_log(base_path: &Path) -> Result<Vec<UndoEntry>> {
+    Ok(read_undo_entries(base_path)?.0)
+}
+
+/// True if `path` lies under the canonical `base` with no symlink among its
+/// existing components below `base`.
+fn inside_without_symlinks(base: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(base) else {
+        return false;
+    };
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return false,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    true
+}
+
+/// Move one undo entry back, refusing anything that would leave the library.
+fn restore_undo_entry(base: &Path, entry: &UndoEntry) -> Result<()> {
+    let dest = Path::new(&entry.destination_path);
+    let orig = Path::new(&entry.original_path);
+    let parent = orig.parent().context("original path has no parent")?;
+    if !inside_without_symlinks(base, dest)
+        || !inside_without_symlinks(base, orig)
+        || !dest.canonicalize()?.starts_with(base)
+    {
+        anyhow::bail!("entry points outside the library");
+    }
+    if fs::symlink_metadata(orig).is_ok() {
+        anyhow::bail!("original path is occupied");
+    }
+    fs::create_dir_all(parent)?;
+    if !parent.canonicalize()?.starts_with(base) {
+        anyhow::bail!("entry points outside the library");
+    }
+    move_file(dest, orig)
 }
 
 /// Undo the last organization run by moving files back to their original paths.
+/// Entries that cannot be restored (or point outside `base_path`) stay in the
+/// log for a later retry; nothing is ever overwritten.
 pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result<()> {
     let started = std::time::Instant::now();
-    let entries = read_undo_log(base_path)?;
+    let (entries, raw) = read_undo_entries(base_path)?;
     if entries.is_empty() {
         anyhow::bail!("no undo entries found");
     }
+    let base = base_path.canonicalize()?;
+    stats.errors += raw.len();
 
     let mut remaining = Vec::new();
-    for entry in &entries {
-        let dest = PathBuf::from(&entry.destination_path);
-        let orig = PathBuf::from(&entry.original_path);
-
-        if !dest.exists() {
-            // File was already moved or deleted; skip
+    for entry in entries {
+        if let Err(error) = restore_undo_entry(&base, &entry) {
+            eprintln!(
+                "could not restore {} to {}: {error:#}",
+                entry.destination_path, entry.original_path
+            );
             stats.errors += 1;
-            remaining.push(entry.clone());
+            remaining.push(entry);
             continue;
         }
-
-        if let Some(parent) = orig.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        if orig.exists() {
-            stats.errors += 1;
-            remaining.push(entry.clone());
-            continue;
-        }
-        // Use the same cross-volume-safe move helper as organization.
-        move_file(&dest, &orig)?;
         stats.undone += 1;
-        if let Some(parent) = dest.parent() {
-            let is_empty = fs::read_dir(parent)
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(false);
-            if is_empty {
-                let _ = fs::remove_dir(parent);
-            }
+        if let Some(parent) = Path::new(&entry.destination_path).parent() {
+            let _ = fs::remove_dir(parent);
         }
         println!(
             "undone: moved {} back to {}",
-            dest.display(),
-            orig.display()
+            entry.destination_path, entry.original_path
         );
     }
 
-    // Keep entries that could not be restored so the user can resolve the
-    // conflict and retry instead of losing the undo history.
-    let undo_path = base_path.join(".vrchat-organizer-undo.json");
-    if remaining.is_empty() {
+    let undo_path = base_path.join(UNDO_FILE);
+    if remaining.is_empty() && raw.is_empty() {
         let _ = fs::remove_file(&undo_path);
     } else {
-        let data = serde_json::to_string_pretty(&remaining)?;
-        fs::write(&undo_path, data)?;
+        write_undo_log(&undo_path, &remaining, &raw)?;
     }
 
-    log_activity(
+    let logged = log_activity(
         base_path,
         &ActivityEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1008,74 +1594,87 @@ pub fn undo_organization(base_path: &Path, stats: &mut OrganizerStats) -> Result
             files_affected: stats.undone,
             details: format!("restored={}, errors={}", stats.undone, stats.errors),
         },
-    )
-    .context("failed to write activity log")?;
-
+    );
+    if let Err(error) = logged {
+        eprintln!("warning: could not write activity log: {error:#}");
+    }
     Ok(())
 }
 
-/// Check if a file is already organized (in a destination subfolder matching the template).
-pub fn is_already_organized(file_path: &Path, config: &OrganizerConfig) -> bool {
-    // Compile once and reuse across calls (avoids recompiling a regex per file).
-    static DATE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let date_re = DATE_RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}$").unwrap());
-
-    let Some(parent) = file_path.parent() else {
-        return false;
-    };
-    if parent == config.base_path {
-        return false;
+/// Move `src` to `dst` without ever replacing an existing `dst`. On any error
+/// the source is left exactly as it was and nothing is left at `dst`.
+pub fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    match fs::hard_link(src, dst) {
+        Ok(()) => remove_source(src, dst),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error.into()),
+        // Hard links unsupported (FAT/exFAT) or another device: copy instead.
+        Err(_) => copy_file_no_clobber(src, dst),
     }
-
-    // A nested folder is not automatically an organized folder: arbitrary
-    // user-created nesting must still be scanned. Only the app's
-    // YYYY-MM/<destination> layout counts as organized.
-    let mut current = Some(parent);
-    while let Some(dir) = current {
-        let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        if date_re.is_match(name) {
-            return dir != parent;
-        }
-        if dir == config.base_path {
-            break;
-        }
-        current = dir.parent();
-    }
-    false
 }
 
-/// Move a file from `src` to `dst`, falling back to copy+remove if they are on
-/// different filesystems (EXDEV). Returns the error if the move still fails.
-pub fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    match fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(18) => {
-            // EXDEV: copy to a same-directory temporary file first so an
-            // interrupted copy never leaves a partial destination.
-            let parent = dst
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("destination has no parent"))?;
-            let tmp = parent.join(format!(
-                ".{}.copying.{}",
-                dst.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("screenshot"),
-                std::process::id()
-            ));
-            let result = (|| -> anyhow::Result<()> {
-                fs::copy(src, &tmp)?;
-                fs::rename(&tmp, dst)?;
-                fs::remove_file(src)?;
-                Ok(())
-            })();
-            if result.is_err() {
-                let _ = fs::remove_file(&tmp);
-            }
-            result?;
-            Ok(())
+/// Final step of a move: drop the source name, or undo the new name if that fails.
+fn remove_source(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    fs::remove_file(src).map_err(|error| {
+        let _ = fs::remove_file(dst);
+        error.into()
+    })
+}
+
+/// Only `.<image name>.copying.<pid>.<n>` (as written below) counts as our temp file,
+/// so cleanup can never delete a user's own file.
+fn is_copy_temp_name(name: &str) -> bool {
+    let Some((image, suffix)) = name
+        .strip_prefix('.')
+        .and_then(|rest| rest.rsplit_once(".copying."))
+    else {
+        return false;
+    };
+    let mut parts = suffix.split('.');
+    let numeric = |part: Option<&str>| {
+        part.is_some_and(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+    };
+    numeric(parts.next())
+        && numeric(parts.next())
+        && parts.next().is_none()
+        && is_image_path(Path::new(image))
+}
+
+fn copy_file_no_clobber(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    let parent = dst
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("destination has no parent"))?;
+    let tmp = parent.join(format!(
+        ".{}.copying.{}",
+        dst.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("screenshot"),
+        temp_suffix()
+    ));
+    let result = (|| -> anyhow::Result<()> {
+        let mut output = create_new_file(&tmp)?;
+        let copied = std::io::copy(&mut fs::File::open(src)?, &mut output)?;
+        output.sync_all()?;
+        output.set_permissions(fs::metadata(src)?.permissions())?;
+        drop(output);
+        if copied != fs::metadata(src)?.len() || fs::metadata(&tmp)?.len() != copied {
+            anyhow::bail!("copy of {} is incomplete", src.display());
         }
-        Err(e) => Err(e.into()),
-    }
+        match fs::hard_link(&tmp, dst) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error.into()),
+            Err(_) => {
+                // ponytail: exists-check + rename has a tiny race window; only
+                // used where the filesystem has no hard links at all.
+                if fs::symlink_metadata(dst).is_ok() {
+                    anyhow::bail!("destination already exists: {}", dst.display());
+                }
+                Ok(fs::rename(&tmp, dst)?)
+            }
+        }
+    })();
+    let _ = fs::remove_file(&tmp);
+    result?;
+    remove_source(src, dst)
 }
 
 pub fn sanitize_name(name: &str) -> String {
@@ -1089,7 +1688,13 @@ pub fn sanitize_name(name: &str) -> String {
     let cleaned = cleaned.trim().trim_matches('.').to_string();
     if cleaned.is_empty() {
         "Unnamed World".to_string()
-    } else if is_windows_reserved_name(&cleaned) {
+    } else if is_windows_reserved_name(&cleaned)
+        || is_month_folder(&cleaned)
+        || cleaned.eq_ignore_ascii_case("Prints")
+        || cleaned.eq_ignore_ascii_case(THUMBNAIL_DIR)
+    {
+        // Reserved by the app's own layout (a world named "2025-01" would
+        // otherwise be read as a month folder and nest deeper every run).
         format!("{cleaned}_")
     } else {
         cleaned
@@ -1185,16 +1790,41 @@ struct PngTextEntry {
     value: String,
 }
 
-/// Read PNG text chunks without touching IDAT pixel data.
+/// Inflate a zTXt/iTXt payload to at most `limit` bytes.
+fn inflate_text(compressed: &[u8], limit: u64) -> String {
+    let mut value = String::new();
+    let _ = ZlibDecoder::new(compressed)
+        .take(limit)
+        .read_to_string(&mut value);
+    value
+}
+
+/// Per-chunk cap; a crafted PNG cannot exhaust memory through text chunks.
+const MAX_INFLATED_TEXT: u64 = 1 << 20;
+const MAX_TEXT_TOTAL: u64 = 4 << 20;
+const MAX_TEXT_CHUNKS: usize = 64;
+const TEXT_KEYWORDS: [&str; 7] = [
+    "description",
+    "xml:com.adobe.xmp",
+    "comment",
+    "software",
+    "creator tool",
+    "creator_tool",
+    "vrchat organizer participants",
+];
+
+/// Read PNG text chunks. VRChat writes them before IDAT; other writers may
+/// put them after it, so pixel data is seeked over until text is found.
 fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut signature = [0u8; 8];
     reader.read_exact(&mut signature)?;
-    if signature != [137, 80, 78, 71, 13, 10, 26, 10] {
+    if signature != PNG_SIGNATURE {
         anyhow::bail!("not a valid PNG file");
     }
     let mut entries = Vec::new();
+    let (mut text_chunks, mut budget) = (0, MAX_TEXT_TOTAL);
     loop {
         let mut header = [0u8; 8];
         if reader.read_exact(&mut header).is_err() {
@@ -1202,28 +1832,41 @@ fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
         }
         let chunk_len = u32::from_be_bytes(header[..4].try_into().unwrap()) as u64;
         let chunk_type = &header[4..8];
-        if chunk_type == b"IDAT" {
-            break;
-        }
-        if chunk_type == b"IEND" {
+        if chunk_type == b"IEND" || (chunk_type == b"IDAT" && !entries.is_empty()) {
             break;
         }
         if chunk_type == b"tEXt" || chunk_type == b"zTXt" || chunk_type == b"iTXt" {
             if chunk_len > 16 * 1024 * 1024 {
                 anyhow::bail!("PNG text chunk is too large");
             }
-            let mut data = vec![0u8; chunk_len as usize];
+            text_chunks += 1;
+            if text_chunks > MAX_TEXT_CHUNKS || budget == 0 {
+                break;
+            }
+            // Keywords are at most 79 bytes; only read and inflate known ones.
+            let mut data = vec![0u8; chunk_len.min(80) as usize];
             reader.read_exact(&mut data)?;
-            if let Some(null_pos) = data.iter().position(|&byte| byte == 0) {
+            let null_pos = data.iter().position(|&byte| byte == 0).filter(|&end| {
+                chunk_len <= MAX_INFLATED_TEXT
+                    && TEXT_KEYWORDS.iter().any(|known| {
+                        known.eq_ignore_ascii_case(&String::from_utf8_lossy(&data[..end]))
+                    })
+            });
+            if null_pos.is_some() {
+                let head = data.len();
+                data.resize(chunk_len as usize, 0);
+                reader.read_exact(&mut data[head..])?;
+            } else {
+                reader.seek_relative((chunk_len - data.len() as u64) as i64)?;
+            }
+            if let Some(null_pos) = null_pos {
                 let keyword = String::from_utf8_lossy(&data[..null_pos]).into_owned();
                 let raw_value = &data[null_pos + 1..];
                 let value = match chunk_type {
                     b"tEXt" => String::from_utf8(raw_value.to_vec())
                         .unwrap_or_else(|_| raw_value.iter().map(|&byte| byte as char).collect()),
                     b"zTXt" if !raw_value.is_empty() => {
-                        let mut value = String::new();
-                        let _ = ZlibDecoder::new(&raw_value[1..]).read_to_string(&mut value);
-                        value
+                        inflate_text(&raw_value[1..], budget.min(MAX_INFLATED_TEXT))
                     }
                     b"iTXt" if raw_value.len() >= 2 => {
                         let after_flags = &raw_value[2..];
@@ -1241,140 +1884,85 @@ fn extract_png_text_chunks(path: &Path) -> Result<Vec<PngTextEntry>> {
                             Some(text) if raw_value[0] == 0 => {
                                 String::from_utf8_lossy(text).into_owned()
                             }
-                            Some(text) => {
-                                let mut value = String::new();
-                                let _ = ZlibDecoder::new(text).read_to_string(&mut value);
-                                value
-                            }
+                            Some(text) => inflate_text(text, budget.min(MAX_INFLATED_TEXT)),
                             None => String::new(),
                         }
                     }
                     _ => String::new(),
                 };
+                budget = budget.saturating_sub(value.len() as u64);
                 entries.push(PngTextEntry { keyword, value });
             }
         } else {
-            reader.seek(SeekFrom::Current(chunk_len as i64))?;
+            reader.seek_relative(chunk_len as i64)?;
         }
-        reader.seek(SeekFrom::Current(4))?;
-    }
-    if entries.is_empty() {
-        return extract_png_text_chunks_full(path);
+        reader.seek_relative(4)?;
     }
     Ok(entries)
 }
 
-fn extract_png_text_chunks_full(path: &Path) -> Result<Vec<PngTextEntry>> {
-    let data = fs::read(path).context("failed to read PNG file")?;
+const MAX_WORLD_NAME: usize = 100;
 
-    // PNG signature check
-    if data.len() < 8 || data[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
-        anyhow::bail!("not a valid PNG file");
-    }
+/// World name and player names from VRChat's JSON description (capped);
+/// `None` players means the JSON has no `players` list.
+fn parse_vrchat_description(value: &str) -> Option<(Option<String>, Option<Vec<String>>)> {
+    let parsed: serde_json::Value = serde_json::from_str(value).ok()?;
+    let world = parsed
+        .pointer("/world/name")
+        .and_then(|name| name.as_str())
+        .map(|name| sanitize_name(&name.chars().take(MAX_WORLD_NAME).collect::<String>()));
+    let players = parsed
+        .get("players")
+        .and_then(|players| players.as_array())
+        .map(|players| {
+            players
+                .iter()
+                .filter_map(|player| player.get("displayName")?.as_str())
+                .map(str::trim)
+                .filter(|name| is_valid_person_name(name))
+                .take(MAX_PARTICIPANTS)
+                .map(ToOwned::to_owned)
+                .collect()
+        });
+    Some((world, players))
+}
 
-    let mut entries = Vec::new();
-    let mut offset = 8; // start after signature
-
-    while offset + 12 <= data.len() {
-        let chunk_len = u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
-
-        // Guard against malformed headers: ensure the full chunk (length +
-        // type + data + CRC) is within bounds before slicing. Prevents a
-        // panic on corrupt/incomplete PNG files.
-        let chunk_total = 12usize.checked_add(chunk_len).ok_or_else(|| {
-            anyhow::anyhow!("malformed PNG: chunk length {} overflows usize", chunk_len)
-        })?;
-        if offset + chunk_total > data.len() {
-            anyhow::bail!(
-                "malformed PNG: chunk length {} exceeds file size",
-                chunk_len
-            );
-        }
-
-        let chunk_type = &data[offset + 4..offset + 8];
-
-        // If we hit IEND, we're done
-        if chunk_type == b"IEND" {
-            break;
-        }
-
-        if chunk_type == b"tEXt" || chunk_type == b"zTXt" || chunk_type == b"iTXt" {
-            let chunk_data = &data[offset + 8..offset + 8 + chunk_len];
-
-            // Find the null byte separating keyword from value
-            if let Some(null_pos) = chunk_data.iter().position(|&b| b == 0) {
-                let keyword = String::from_utf8_lossy(&chunk_data[..null_pos]).to_string();
-                let raw_value = &chunk_data[null_pos + 1..];
-
-                let value = match chunk_type {
-                    b"tEXt" => {
-                        // Organizer tags are UTF-8 despite the legacy tEXt
-                        // container; retain Latin-1 fallback for old metadata.
-                        String::from_utf8(raw_value.to_vec()).unwrap_or_else(|_| {
-                            raw_value.iter().map(|&b| b as char).collect::<String>()
-                        })
-                    }
-                    b"zTXt" => {
-                        // Byte after null = compression method (should be 0 for zlib)
-                        if raw_value.is_empty() {
-                            String::new()
-                        } else {
-                            let compressed = &raw_value[1..]; // skip compression method byte
-                            let mut decoder = ZlibDecoder::new(compressed);
-                            let mut decompressed = String::new();
-                            decoder.read_to_string(&mut decompressed).ok();
-                            decompressed
-                        }
-                    }
-                    b"iTXt" => {
-                        // compression flag (1 byte) + compression method (1 byte) + language (null-term) + translated keyword (null-term) + text
-                        if raw_value.len() < 2 {
-                            String::new()
-                        } else {
-                            let compression_flag = raw_value[0];
-                            // skip compression flag + method (2 bytes)
-                            let after_flags = &raw_value[2..];
-                            // skip language (null-terminated)
-                            if let Some(lang_end) = after_flags.iter().position(|&b| b == 0) {
-                                let after_lang = &after_flags[lang_end + 1..];
-                                // skip translated keyword (null-terminated)
-                                if let Some(tk_end) = after_lang.iter().position(|&b| b == 0) {
-                                    let text_bytes = &after_lang[tk_end + 1..];
-                                    if compression_flag == 0 {
-                                        // Uncompressed UTF-8
-                                        String::from_utf8_lossy(text_bytes).to_string()
-                                    } else {
-                                        // Compressed
-                                        let mut decoder = ZlibDecoder::new(text_bytes);
-                                        let mut decompressed = String::new();
-                                        decoder.read_to_string(&mut decompressed).ok();
-                                        decompressed
-                                    }
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            }
-                        }
-                    }
-                    _ => unreachable!(),
-                };
-
-                entries.push(PngTextEntry { keyword, value });
+/// World name from VRChat's own XMP (no player list there). VRChat swaps
+/// filename-unsafe punctuation for lookalikes (`|` → `｜`, `.` → `․`); map them
+/// back so these photos share a folder with VRCX-tagged ones of the same world.
+fn parse_vrchat_xmp(xmp: &str) -> Option<String> {
+    static XMP_WORLD_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = XMP_WORLD_RE.get_or_init(|| {
+        Regex::new(
+            r#"<vrc:WorldDisplayName>([^<]*)</vrc:WorldDisplayName>|vrc:WorldDisplayName="([^"]*)""#,
+        )
+        .unwrap()
+    });
+    let captures = re.captures(xmp)?;
+    let raw = captures.get(1).or(captures.get(2))?.as_str();
+    let name: String = raw
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+        .chars()
+        .map(|ch| match ch {
+            'ǃ' => '!',
+            '․' => '.',
+            '˸' => ':',
+            '⁄' => '/',
+            '‚' => ',',
+            // Fullwidth ASCII punctuation; fullwidth letters/digits left alone.
+            '\u{FF01}'..='\u{FF5E}' if !ch.is_alphanumeric() => {
+                char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch)
             }
-        }
-
-        // Move to next chunk: 4 bytes type + chunk_len + 4 bytes CRC
-        offset += 12 + chunk_len;
-    }
-
-    Ok(entries)
+            _ => ch,
+        })
+        .take(MAX_WORLD_NAME)
+        .collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| sanitize_name(name))
 }
 
 /// Parse world name and software from a list of PNG text entries.
@@ -1382,46 +1970,31 @@ fn parse_png_entries(
     entries: &[PngTextEntry],
 ) -> (Option<String>, Option<String>, Vec<String>, Vec<String>) {
     let mut world_name: Option<String> = None;
+    let mut xmp_world: Option<String> = None;
     let mut software: Option<String> = None;
     let mut participants = Vec::new();
     let mut tagged_participants: Vec<String> = Vec::new();
 
     for entry in entries {
         match entry.keyword.to_lowercase().as_str() {
+            "xml:com.adobe.xmp" if xmp_world.is_none() => {
+                xmp_world = parse_vrchat_xmp(&entry.value);
+            }
             "description" | "comment" => {
                 if world_name.is_some() {
                     continue;
                 }
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&entry.value) {
-                    if let Some(world) = parsed
-                        .get("world")
-                        .and_then(|w| w.get("name"))
-                        .and_then(|n| n.as_str())
-                    {
-                        world_name = Some(sanitize_name(world));
-                    }
-                    if let Some(players) =
-                        parsed.get("players").and_then(|players| players.as_array())
-                    {
-                        participants = players
-                            .iter()
-                            .filter_map(|player| {
-                                player
-                                    .get("displayName")
-                                    .and_then(|name| name.as_str())
-                                    .map(str::trim)
-                                    .filter(|name| !name.is_empty())
-                                    .map(ToOwned::to_owned)
-                            })
-                            .collect();
-                    }
+                if let Some((world, players)) = parse_vrchat_description(&entry.value) {
+                    world_name = world.or(world_name);
+                    participants = players.unwrap_or(participants);
                 }
             }
             "vrchat organizer participants" => {
                 if let Ok(names) = serde_json::from_str::<Vec<String>>(&entry.value) {
                     for name in names {
                         let name = name.trim();
-                        if !name.is_empty()
+                        if is_valid_person_name(name)
+                            && tagged_participants.len() < MAX_PARTICIPANTS
                             && !tagged_participants
                                 .iter()
                                 .any(|existing| existing.eq_ignore_ascii_case(name))
@@ -1441,84 +2014,14 @@ fn parse_png_entries(
         }
     }
 
+    // VRCX's JSON wins (it also lists players); XMP fills in when VRCX is
+    // absent or wrote an empty world name.
+    let world_name = match world_name {
+        Some(name) if name == "Unnamed World" => xmp_world.or(Some(name)),
+        None => xmp_world,
+        name => name,
+    };
     (world_name, software, participants, tagged_participants)
-}
-
-fn png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
-    let length = u32::try_from(data.len()).context("PNG metadata is too large")?;
-    let mut chunk = Vec::with_capacity(data.len() + 12);
-    chunk.extend_from_slice(&length.to_be_bytes());
-    chunk.extend_from_slice(chunk_type);
-    chunk.extend_from_slice(data);
-    let mut checksum = crc32fast::Hasher::new();
-    checksum.update(chunk_type);
-    checksum.update(data);
-    chunk.extend_from_slice(&checksum.finalize().to_be_bytes());
-    Ok(chunk)
-}
-
-/// Add a person to the Organizer-owned PNG metadata without re-encoding pixels.
-pub fn tag_png_participant(path: &Path, participant: &str) -> Result<Vec<String>> {
-    let participant = participant.trim();
-    if participant.is_empty() {
-        anyhow::bail!("participant name must not be empty");
-    }
-    if participant.chars().count() > 80 {
-        anyhow::bail!("participant name is too long");
-    }
-
-    let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    if data.len() < 8 || data[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
-        anyhow::bail!("person tagging currently supports PNG screenshots only");
-    }
-
-    let entries = extract_png_text_chunks(path)?;
-    let (_, _, _, mut participants) = parse_png_entries(&entries);
-    if !participants
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(participant))
-    {
-        participants.push(participant.to_owned());
-    }
-
-    let metadata = serde_json::to_string(&participants)?;
-    let mut text = b"VRChat Organizer Participants".to_vec();
-    text.push(0);
-    text.extend_from_slice(metadata.as_bytes());
-    let metadata_chunk = png_chunk(b"tEXt", &text)?;
-
-    let mut output = Vec::with_capacity(data.len() + metadata_chunk.len());
-    output.extend_from_slice(&data[..8]);
-    let mut offset = 8;
-    let mut inserted = false;
-    while offset + 12 <= data.len() {
-        let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-        let end = offset
-            .checked_add(12)
-            .and_then(|value| value.checked_add(length))
-            .ok_or_else(|| anyhow::anyhow!("malformed PNG chunk length"))?;
-        if end > data.len() {
-            anyhow::bail!("malformed PNG: chunk exceeds file size");
-        }
-        if !inserted && &data[offset + 4..offset + 8] == b"IDAT" {
-            output.extend_from_slice(&metadata_chunk);
-            inserted = true;
-        }
-        output.extend_from_slice(&data[offset..end]);
-        let is_iend = &data[offset + 4..offset + 8] == b"IEND";
-        offset = end;
-        if is_iend {
-            break;
-        }
-    }
-    if !inserted {
-        anyhow::bail!("PNG is missing IDAT");
-    }
-
-    let temporary = path.with_extension("png.organizer.tmp");
-    fs::write(&temporary, output)?;
-    fs::rename(&temporary, path)?;
-    Ok(participants)
 }
 
 // ── JPEG EXIF extraction ──────────────────────────────────────────────────
@@ -1548,31 +2051,12 @@ fn extract_exif_meta(path: &Path) -> (Option<String>, Option<String>, Vec<String
         // Use raw ASCII bytes instead of display_value() to avoid quoting issues
         if let exif::Value::Ascii(bytes) = &field.value {
             if let Some(first) = bytes.first() {
-                if let Ok(value) = std::str::from_utf8(first) {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
-                        if let Some(world) = parsed
-                            .get("world")
-                            .and_then(|w| w.get("name"))
-                            .and_then(|n| n.as_str())
-                        {
-                            world_name = Some(sanitize_name(world));
-                        }
-                        if let Some(players) =
-                            parsed.get("players").and_then(|players| players.as_array())
-                        {
-                            participants = players
-                                .iter()
-                                .filter_map(|player| {
-                                    player
-                                        .get("displayName")
-                                        .and_then(|name| name.as_str())
-                                        .map(str::trim)
-                                        .filter(|name| !name.is_empty())
-                                        .map(ToOwned::to_owned)
-                                })
-                                .collect();
-                        }
-                    }
+                if let Some((world, players)) = std::str::from_utf8(first)
+                    .ok()
+                    .and_then(parse_vrchat_description)
+                {
+                    world_name = world;
+                    participants = players.unwrap_or_default();
                 }
             }
         }
@@ -1726,10 +2210,8 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
     if !config.base_path.exists() {
         anyhow::bail!("path does not exist: {}", config.base_path.display());
     }
-    if !config.dry_run {
-        let undo_path = config.base_path.join(".vrchat-organizer-undo.json");
-        let _ = fs::remove_file(undo_path);
-    }
+    // The previous run's undo history is replaced at this run's first real move.
+    let mut fresh_undo = !config.dry_run;
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     if config.single_folder || config.scan_all_months {
@@ -1740,7 +2222,7 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
         for entry in fs::read_dir(&config.base_path)? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
+            if entry.file_type()?.is_dir() {
                 let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -1766,7 +2248,7 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
         if cancel_requested() {
             anyhow::bail!("scan cancelled");
         }
-        process_folder(&folder, config, stats)?;
+        process_folder(&folder, config, stats, &mut fresh_undo)?;
     }
 
     if !config.single_folder && !config.scan_all_months {
@@ -1787,8 +2269,10 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
             if cancel_requested() {
                 anyhow::bail!("scan cancelled");
             }
-            if let Err(error) = organize_single_file_unlocked(&image_file, config, stats) {
-                eprintln!("error processing {}: {error}", image_file.display());
+            if let Err(error) =
+                organize_single_file_unlocked(&image_file, config, stats, &mut fresh_undo)
+            {
+                eprintln!("error processing {}: {error:#}", image_file.display());
             }
         }
     }
@@ -1798,7 +2282,7 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
     } else {
         "warning"
     };
-    log_activity(
+    let logged = log_activity(
         &config.base_path,
         &ActivityEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1815,8 +2299,11 @@ pub fn organize_path(config: &OrganizerConfig, stats: &mut OrganizerStats) -> Re
                 stats.errors
             ),
         },
-    )
-    .context("failed to write activity log")?;
+    );
+    // The moves already happened and are undoable; a log failure is not fatal.
+    if let Err(error) = logged {
+        eprintln!("warning: could not write activity log: {error:#}");
+    }
     Ok(())
 }
 
@@ -1877,13 +2364,16 @@ pub fn organize_single_file(
             }
         }
     };
-    organize_single_file_unlocked(file_path, config, stats)
+    organize_single_file_unlocked(file_path, config, stats, &mut false)
 }
 
+/// `fresh_undo` is true until the first move of a new `organize_path` run,
+/// which replaces the previous run's undo log.
 fn organize_single_file_unlocked(
     file_path: &Path,
     config: &OrganizerConfig,
     stats: &mut OrganizerStats,
+    fresh_undo: &mut bool,
 ) -> Result<()> {
     if cancel_requested() {
         anyhow::bail!("scan cancelled");
@@ -1942,39 +2432,64 @@ fn organize_single_file_unlocked(
                 destination.display()
             ));
         } else {
-            if let Some(parent) = destination.parent() {
+            let parent = destination.parent().unwrap_or(&month_folder);
+            let new_dirs: Vec<PathBuf> = [parent, month_folder.as_path()]
+                .into_iter()
+                .filter(|dir| !dir.exists())
+                .map(Path::to_path_buf)
+                .collect();
+            let moved = (|| -> Result<()> {
                 fs::create_dir_all(parent)?;
-                println!("ensured folder: {}", parent.display());
-            }
-
-            // Log undo entry before moving
-            let original_full = file_path
-                .canonicalize()
-                .unwrap_or_else(|_| file_path.to_path_buf());
-            // Canonicalize the parent folder (the destination file doesn't exist
-            // yet) so the undo log is stable even if the base path contains
-            // symlinks or is later resolved differently.
-            let dest_parent = destination
-                .parent()
-                .and_then(|p| p.canonicalize().ok())
-                .unwrap_or_else(|| destination.parent().unwrap_or(Path::new("")).to_path_buf());
-            let dest_full = dest_parent.join(destination.file_name().unwrap_or_default());
-            // Move with cross-device (EXDEV) fallback; propagate errors so the
-            // stats aren't inflated for moves that never happened.
-            move_file(file_path, &destination).with_context(|| {
-                format!(
+                let original_full = file_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| file_path.to_path_buf());
+                // Canonicalize the parent folder (the destination file doesn't
+                // exist yet) so the undo log is stable even if the base path
+                // contains symlinks or is later resolved differently.
+                let dest_full = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf())
+                    .join(destination.file_name().unwrap_or_default());
+                move_file(file_path, &destination)?;
+                let logged = (|| -> Result<()> {
+                    if *fresh_undo {
+                        match fs::remove_file(config.base_path.join(UNDO_FILE)) {
+                            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                                return Err(error.into())
+                            }
+                            _ => *fresh_undo = false,
+                        }
+                    }
+                    log_undo_entry(
+                        &config.base_path,
+                        &UndoEntry {
+                            original_path: original_full.to_string_lossy().to_string(),
+                            destination_path: dest_full.to_string_lossy().to_string(),
+                        },
+                    )
+                })();
+                // Never leave a move that cannot be undone: put the file back.
+                if let Err(error) = logged {
+                    return match move_file(&destination, file_path) {
+                        Ok(()) => Err(error.context("could not record undo entry; move rolled back")),
+                        Err(rollback) => Err(error.context(format!(
+                            "could not record undo entry and could not move the file back: {rollback:#}"
+                        ))),
+                    };
+                }
+                Ok(())
+            })();
+            if let Err(error) = moved {
+                stats.errors += 1;
+                for dir in &new_dirs {
+                    let _ = fs::remove_dir(dir);
+                }
+                return Err(error.context(format!(
                     "failed to move {} -> {}",
                     file_path.display(),
                     destination.display()
-                )
-            })?;
-            log_undo_entry(
-                config.base_path.as_path(),
-                &UndoEntry {
-                    original_path: original_full.to_string_lossy().to_string(),
-                    destination_path: dest_full.to_string_lossy().to_string(),
-                },
-            )?;
+                )));
+            }
             println!("moved {} -> {}", file_path.display(), destination.display());
         }
         stats.organized += 1;
@@ -2004,9 +2519,10 @@ fn process_folder(
     folder: &Path,
     config: &OrganizerConfig,
     stats: &mut OrganizerStats,
+    fresh_undo: &mut bool,
 ) -> Result<()> {
     let mut image_files = Vec::new();
-    for entry in WalkDir::new(folder) {
+    for entry in WalkDir::new(folder).follow_root_links(folder == config.base_path) {
         if cancel_requested() {
             anyhow::bail!("scan cancelled");
         }
@@ -2018,6 +2534,14 @@ fn process_folder(
             let path = entry.into_path();
             if is_image_path(&path) && !is_ignored_path(&path, &config.base_path) {
                 image_files.push(path);
+            } else if !config.dry_run
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_copy_temp_name)
+            {
+                // Leftover from an interrupted cross-device copy; its source is intact.
+                let _ = fs::remove_file(&path);
             }
         }
     }
@@ -2028,8 +2552,8 @@ fn process_folder(
             anyhow::bail!("scan cancelled");
         }
         // Delegate to organize_single_file which handles stats, metadata, template resolution, undo
-        if let Err(e) = organize_single_file_unlocked(&image_file, config, stats) {
-            eprintln!("error processing {}: {e}", image_file.display());
+        if let Err(e) = organize_single_file_unlocked(&image_file, config, stats, fresh_undo) {
+            eprintln!("error processing {}: {e:#}", image_file.display());
         }
     }
 
@@ -2039,6 +2563,891 @@ fn process_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        chunk.extend_from_slice(&crc.sum().to_be_bytes());
+        chunk
+    }
+
+    /// A real PNG with an optional VRChat-style Description tEXt chunk after IHDR.
+    fn vrchat_png(world: Option<&str>, width: u32, height: u32) -> Vec<u8> {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            width,
+            height,
+            image::Rgb([90, 120, 160]),
+        ))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        if let Some(world) = world {
+            let text = format!(
+                "Description\0{}",
+                serde_json::json!({"world": {"name": world}, "players": [{"displayName": "Alice"}]})
+            );
+            png.splice(33..33, png_chunk(b"tEXt", text.as_bytes()));
+        }
+        png
+    }
+
+    /// Handcrafted PNG byte layouts covering every branch of the fingerprint.
+    fn fingerprint_fixtures() -> Vec<Vec<u8>> {
+        let mut base = PNG_SIGNATURE.to_vec();
+        base.extend(png_chunk(b"IHDR", &[0, 0, 0, 4, 0, 0, 0, 4, 8, 2, 0, 0, 0]));
+        base.extend(png_chunk(b"IDAT", b"pixel data"));
+        base.extend(png_chunk(b"IEND", b""));
+        let mut tagged = base.clone();
+        let mut tag = ORGANIZER_TAG_PREFIX.to_vec();
+        tag.extend_from_slice(br#"["Alice"]"#);
+        tagged.splice(33..33, png_chunk(b"tEXt", &tag));
+        let mut short_text = base.clone();
+        short_text.splice(33..33, png_chunk(b"tEXt", b"VRChat\0x"));
+        let mut trailing = base.clone();
+        trailing.extend_from_slice(&[1; 40]);
+        let mut no_iend = base[..base.len() - 12].to_vec();
+        no_iend.extend_from_slice(&[7; 5]);
+        let mut truncated = base.clone();
+        truncated.truncate(base.len() - 20);
+        let mut huge = PNG_SIGNATURE.to_vec();
+        huge.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        huge.extend_from_slice(b"tEXtabcdefgh");
+        vec![
+            base,
+            tagged,
+            short_text,
+            trailing,
+            no_iend,
+            truncated,
+            huge,
+            PNG_SIGNATURE.to_vec(),
+            b"\xFF\xD8\xFF\xE0 jpeg".to_vec(),
+            Vec::new(),
+        ]
+    }
+
+    /// Expected values were produced by the original whole-file
+    /// implementation; any change here wipes every user's stored tags.
+    #[test]
+    fn png_fingerprint_is_byte_identical_to_original() {
+        let dir = std::env::temp_dir().join(format!("vrchat-organizer-fp-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let plain = Some("8e841a212b1afc6790f531cce55baa9f57e8187dd2961ed1e3e0c8a983b93972");
+        let expected = [
+            plain,
+            plain,
+            Some("612d0bc6f7337281a89881a7dda41aec347d746649c8b2991ea4798c65d8ee42"),
+            plain,
+            Some("561cd354362372520a7e78183dfb9bc84869d64f0f058fbb541634897fef3e58"),
+            None,
+            None,
+            Some("4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"),
+            None,
+            None,
+        ];
+        for (index, (bytes, expected)) in
+            fingerprint_fixtures().into_iter().zip(expected).enumerate()
+        {
+            let path = dir.join(format!("{index}.png"));
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(
+                normalized_png_fingerprint(&path).ok().as_deref(),
+                expected,
+                "fixture {index}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("vrchat-organizer-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn real_run(base_path: &Path) -> OrganizerConfig {
+        OrganizerConfig {
+            base_path: base_path.to_path_buf(),
+            dry_run: false,
+            scan_all_months: false,
+            single_folder: false,
+            template: "{world}".to_string(),
+        }
+    }
+
+    /// Relative paths of every non-hidden file below `dir`.
+    fn tree(dir: &Path) -> Vec<String> {
+        let mut files: Vec<String> = WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .filter(|path| !path.starts_with('.'))
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn organizes_into_month_world_layout_and_undo_restores_it() {
+        let dir = fresh_dir("e2e");
+        let month = dir.join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let root_photo = "VRChat_2026-09-20_21-00-00.000_8x8.png";
+        let month_photo = "VRChat_2026-10-07_12-00-00.000_8x8.png";
+        let print = "VRChat_2026-10-07_12-30-00.000_2048x1440.png";
+        let plain = "VRChat_2026-10-07_13-00-00.000_8x8.png";
+        fs::write(dir.join(root_photo), vrchat_png(Some("Root World"), 8, 8)).unwrap();
+        fs::write(
+            month.join(month_photo),
+            vrchat_png(Some("Month: World"), 8, 8),
+        )
+        .unwrap();
+        fs::write(month.join(print), vrchat_png(None, 2048, 1440)).unwrap();
+        fs::write(month.join(plain), vrchat_png(None, 8, 8)).unwrap();
+        let before = tree(&dir);
+
+        let mut stats = OrganizerStats::default();
+        organize_path(&real_run(&dir), &mut stats).unwrap();
+        assert_eq!(
+            (stats.organized, stats.no_metadata, stats.errors),
+            (3, 1, 0)
+        );
+        assert_eq!(
+            tree(&dir),
+            vec![
+                format!("2026-09/Root World/{root_photo}"),
+                format!("2026-10/Month_ World/{month_photo}"),
+                format!("2026-10/Prints/{print}"),
+                format!("2026-10/{plain}"),
+            ]
+        );
+        assert_eq!(read_undo_log(&dir).unwrap().len(), 3);
+
+        let mut undo = OrganizerStats::default();
+        undo_organization(&dir, &mut undo).unwrap();
+        assert_eq!((undo.undone, undo.errors), (3, 0));
+        assert_eq!(tree(&dir), before);
+        assert!(read_undo_log(&dir).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_file_never_replaces_an_existing_destination() {
+        let dir = fresh_dir("no-clobber");
+        let (src, dst) = (dir.join("a.png"), dir.join("b.png"));
+        fs::write(&src, "source").unwrap();
+        fs::write(&dst, "someone else").unwrap();
+        assert!(move_file(&src, &dst).is_err());
+        assert!(copy_file_no_clobber(&src, &dst).is_err());
+        assert_eq!(fs::read_to_string(&src).unwrap(), "source");
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "someone else");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            2,
+            "no temp file left behind"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_fallback_moves_or_leaves_source_untouched() {
+        let dir = fresh_dir("copy-move");
+        let src = dir.join("a.png");
+        fs::write(&src, "pixels").unwrap();
+        // Simulated copy failure: the destination folder does not exist.
+        assert!(copy_file_no_clobber(&src, &dir.join("missing").join("a.png")).is_err());
+        assert_eq!(fs::read_to_string(&src).unwrap(), "pixels");
+        copy_file_no_clobber(&src, &dir.join("b.png")).unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read_to_string(dir.join("b.png")).unwrap(), "pixels");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temp file left behind"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Organizes `name` (written into `<dir>/2026-10/`) and asserts it was left
+    /// exactly where and as it was, with nothing created for it.
+    fn assert_left_alone(dir: &Path, name: &str, bytes: &[u8]) {
+        let photo = dir.join("2026-10").join(name);
+        let mut stats = OrganizerStats::default();
+        organize_path(&real_run(dir), &mut stats).unwrap();
+        assert_eq!(stats.organized, 0, "{name}");
+        assert_eq!(fs::read(&photo).unwrap(), bytes, "{name}");
+        assert!(read_undo_log(dir).unwrap().is_empty(), "{name}");
+    }
+
+    #[test]
+    fn unreadable_images_are_left_alone() {
+        let dir = fresh_dir("corrupt");
+        fs::create_dir_all(dir.join("2026-10")).unwrap();
+        let mut corrupt = PNG_SIGNATURE.to_vec();
+        corrupt.extend_from_slice(b"\0\0\0\x0dIHDRgarbage");
+        for (name, bytes) in [("corrupt.png", corrupt), ("empty.png", Vec::new())] {
+            fs::write(dir.join("2026-10").join(name), &bytes).unwrap();
+            assert_left_alone(&dir, name, &bytes);
+            assert_eq!(tree(&dir), vec![format!("2026-10/{name}")]);
+            fs::remove_file(dir.join("2026-10").join(name)).unwrap();
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_destination_leaves_photo_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_dir("read-only");
+        let world = dir.join("2026-10").join("World");
+        fs::create_dir_all(&world).unwrap();
+        let name = "VRChat_2026-10-07_12-00-00.000_8x8.png";
+        let bytes = vrchat_png(Some("World"), 8, 8);
+        fs::write(dir.join("2026-10").join(name), &bytes).unwrap();
+        fs::set_permissions(&world, fs::Permissions::from_mode(0o555)).unwrap();
+        assert_left_alone(&dir, name, &bytes);
+        fs::set_permissions(&world, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(fs::read_dir(&world).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_log_failure_rolls_the_move_back() {
+        let dir = fresh_dir("undo-fail");
+        fs::create_dir_all(dir.join("2026-10")).unwrap();
+        // A directory where the undo log should be makes every append fail.
+        fs::create_dir_all(dir.join(UNDO_FILE)).unwrap();
+        let name = "VRChat_2026-10-07_12-00-00.000_8x8.png";
+        let bytes = vrchat_png(Some("World"), 8, 8);
+        fs::write(dir.join("2026-10").join(name), &bytes).unwrap();
+        let mut stats = OrganizerStats::default();
+        organize_path(&real_run(&dir), &mut stats).unwrap();
+        assert_eq!((stats.organized, stats.errors), (0, 1));
+        assert_eq!(fs::read(dir.join("2026-10").join(name)).unwrap(), bytes);
+        assert!(
+            !dir.join("2026-10").join("World").exists(),
+            "new world folder removed"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_log_appends_lines_converts_legacy_and_skips_foreign_entries() {
+        let dir = fresh_dir("undo-jsonl");
+        let base = dir.canonicalize().unwrap();
+        let moved = base.join("moved.png");
+        fs::write(&moved, "pixels").unwrap();
+        let inside = UndoEntry {
+            original_path: base.join("original.png").display().to_string(),
+            destination_path: moved.display().to_string(),
+        };
+        let outside = UndoEntry {
+            original_path: std::env::temp_dir()
+                .join("elsewhere.png")
+                .display()
+                .to_string(),
+            destination_path: moved.display().to_string(),
+        };
+        fs::write(
+            base.join(UNDO_FILE),
+            serde_json::to_string_pretty(&[&outside]).unwrap(),
+        )
+        .unwrap();
+        log_undo_entry(&base, &inside).unwrap();
+        let data = fs::read_to_string(base.join(UNDO_FILE)).unwrap();
+        assert_eq!(
+            data.lines().count(),
+            2,
+            "legacy array converted to JSON Lines"
+        );
+        assert_eq!(read_undo_log(&base).unwrap().len(), 2);
+
+        let mut stats = OrganizerStats::default();
+        undo_organization(&base, &mut stats).unwrap();
+        assert_eq!((stats.undone, stats.errors), (1, 1));
+        assert_eq!(
+            fs::read_to_string(base.join("original.png")).unwrap(),
+            "pixels"
+        );
+        let remaining = read_undo_log(&base).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].original_path, outside.original_path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compressed_text_is_capped() {
+        use flate2::{write::ZlibEncoder, Compression};
+        let dir = fresh_dir("zlib-cap");
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&vec![b'a'; 4 << 20]).unwrap();
+        let mut ztxt = b"Description\0\0".to_vec();
+        ztxt.extend(encoder.finish().unwrap());
+        let mut png = vrchat_png(None, 2, 2);
+        png.splice(33..33, png_chunk(b"zTXt", &ztxt));
+        let path = dir.join("bomb.png");
+        fs::write(&path, png).unwrap();
+        let entries = extract_png_text_chunks(&path).unwrap();
+        assert_eq!(entries[0].value.len() as u64, MAX_INFLATED_TEXT);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_after_idat_is_found() {
+        let dir = fresh_dir("text-after-idat");
+        let mut png = vrchat_png(None, 2, 2);
+        let text = br#"Description{"world":{"name":"Late World"}}"#.to_vec();
+        let mut text = text;
+        text.insert(11, 0);
+        let iend = png.len() - 12;
+        png.splice(iend..iend, png_chunk(b"tEXt", &text));
+        let path = dir.join("late.png");
+        fs::write(&path, png).unwrap();
+        assert_eq!(
+            extract_image_meta(&path).unwrap().world_name.as_deref(),
+            Some("Late World")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_writes_only_changed_rows_and_keeps_other_months() {
+        let dir = fresh_dir("cache-rows");
+        for month in ["2026-09", "2026-10"] {
+            let world = dir.join(month).join("World");
+            fs::create_dir_all(&world).unwrap();
+            for index in 0..2 {
+                fs::write(
+                    world.join(format!("{index}.png")),
+                    vrchat_png(Some("World"), 4, 4),
+                )
+                .unwrap();
+            }
+        }
+        let cache = dir.join("library.sqlite");
+        scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        let connection = Connection::open(&cache).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE writes(n INTEGER);
+                 CREATE TRIGGER count_writes AFTER INSERT ON photos BEGIN INSERT INTO writes VALUES(1); END;",
+            )
+            .unwrap();
+        let count = |sql: &str| {
+            connection
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
+        assert_eq!(count("SELECT COUNT(*) FROM writes"), 0);
+        // A latest-month scan must not drop the other month's rows.
+        scan_library_with_cache(&dir, false, Some(&cache)).unwrap();
+        assert_eq!(count("SELECT COUNT(*) FROM photos"), 4);
+        fs::remove_file(dir.join("2026-10/World/0.png")).unwrap();
+        scan_library_with_cache(&dir, false, Some(&cache)).unwrap();
+        assert_eq!(count("SELECT COUNT(*) FROM photos"), 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_tag_writes_keep_every_tag() {
+        let dir = fresh_dir("tag-race");
+        let photos: Vec<PathBuf> = (0..2)
+            .map(|index| {
+                let path = dir.join(format!("{index}.png"));
+                fs::write(&path, vrchat_png(Some(&format!("W{index}")), 2, 2)).unwrap();
+                path
+            })
+            .collect();
+        std::thread::scope(|scope| {
+            for photo in &photos {
+                let dir = &dir;
+                scope.spawn(move || {
+                    for index in 0..15 {
+                        tag_photo_participant_in_store(dir, photo, &format!("P{index}")).unwrap();
+                    }
+                });
+            }
+        });
+        let store = load_tag_store(&dir).unwrap();
+        assert_eq!(store.len(), 2);
+        assert!(store.values().all(|names| names.len() == 15));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn people_come_from_drawn_boxes() {
+        let dir = fresh_dir("people-counts");
+        let db = dir.join("avatar.sqlite");
+        let photos: Vec<PathBuf> = ["2026-10-07_12-00-00", "2026-10-08_12-00-00"]
+            .iter()
+            .map(|stamp| {
+                let path = dir.join(format!("VRChat_{stamp}.000_64x64.png"));
+                fs::write(&path, vrchat_png(Some("Pool"), 64, 64)).unwrap();
+                path
+            })
+            .collect();
+        save_positional_person_tag(&db, &photos[0], "Alice", 0, 0, 10, 10).unwrap();
+        save_positional_person_tag(&db, &photos[0], "Alice", 20, 20, 10, 10).unwrap();
+        save_positional_person_tag(&db, &photos[1], "Alice", 0, 0, 10, 10).unwrap();
+        let bob = save_positional_person_tag(&db, &photos[1], "Bob", 5, 5, 10, 10).unwrap();
+        delete_positional_person_tag(&db, bob.id).unwrap();
+        let people = avatar_people(&db).unwrap();
+        assert_eq!(people.len(), 1, "people without boxes are hidden");
+        assert_eq!(people[0].display_name, "Alice");
+        assert_eq!(people[0].screenshot_count, 2);
+        assert_eq!(people[0].favourite_world.as_deref(), Some("Pool"));
+        assert!(people[0].last_seen.is_some());
+        assert!(Path::new(people[0].thumbnail_path.as_ref().unwrap()).is_file());
+        assert_eq!(avatar_person_photos(&db, people[0].id).unwrap().len(), 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migration_drops_ai_data_but_keeps_drawn_boxes() {
+        let dir = fresh_dir("people-migration");
+        let db = dir.join("avatar-recognition.sqlite");
+        let crops = dir.join("avatar-crops");
+        fs::create_dir_all(&crops).unwrap();
+        fs::write(crops.join("manual-1.jpg"), "drawn").unwrap();
+        fs::write(crops.join("0123abcd.jpg"), "ai").unwrap();
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE avatar_people(id INTEGER PRIMARY KEY, display_name TEXT NOT NULL UNIQUE,
+                     thumbnail_path TEXT, aliases TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
+                     last_seen INTEGER, confidence REAL NOT NULL DEFAULT 0);
+                 CREATE TABLE avatar_samples(id INTEGER PRIMARY KEY, person_id INTEGER REFERENCES avatar_people(id));
+                 CREATE TABLE avatar_detections(id INTEGER PRIMARY KEY, person_id INTEGER REFERENCES avatar_people(id));
+                 CREATE TABLE avatar_scan_cache(screenshot_path TEXT PRIMARY KEY);
+                 CREATE TABLE avatar_profiles(id INTEGER PRIMARY KEY, person_id INTEGER REFERENCES avatar_people(id));
+                 CREATE TABLE person_avatar_links(person_id INTEGER, avatar_id INTEGER REFERENCES avatar_profiles(id));
+                 CREATE TABLE recognition_settings(key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE positional_person_tags(id INTEGER PRIMARY KEY, screenshot_path TEXT NOT NULL,
+                     person_name TEXT NOT NULL, crop_path TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL,
+                     width INTEGER NOT NULL, height INTEGER NOT NULL, image_width INTEGER NOT NULL,
+                     image_height INTEGER NOT NULL, world_name TEXT, captured_at INTEGER,
+                     confidence REAL NOT NULL DEFAULT 1, created_at INTEGER NOT NULL,
+                     UNIQUE(screenshot_path, person_name, x, y, width, height));
+                 INSERT INTO avatar_people(id,display_name,created_at) VALUES(1,'Alice',0),(2,'Learned Only',0);
+                 INSERT INTO avatar_samples VALUES(1,2);
+                 INSERT INTO avatar_detections VALUES(1,2);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO positional_person_tags(screenshot_path,person_name,crop_path,x,y,width,height,
+                     image_width,image_height,created_at) VALUES('a.png','Alice',?,0,0,1,1,1,1,0)",
+                [crops.join("manual-1.jpg").to_string_lossy()],
+            )
+            .unwrap();
+        drop(connection);
+        for _ in 0..2 {
+            let people = avatar_people(&db).unwrap();
+            assert_eq!(people.len(), 1);
+            assert_eq!(people[0].display_name, "Alice");
+            assert_eq!(
+                positional_person_tags(&db, Path::new("a.png"))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        let connection = Connection::open(&db).unwrap();
+        let tables: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(tables, vec!["avatar_people", "positional_person_tags"]);
+        let names = fs::read_dir(&crops).unwrap().count();
+        assert_eq!(names, 1);
+        assert!(crops.join("manual-1.jpg").is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn positional_tag_survives_a_failed_update() {
+        let dir = fresh_dir("positional");
+        let db = dir.join("avatar.sqlite");
+        let photo = dir.join("VRChat_2026-10-07_12-00-00.000_64x64.png");
+        fs::write(&photo, vrchat_png(Some("World"), 64, 64)).unwrap();
+        let tag = save_positional_person_tag(&db, &photo, "Alice", 4, 4, 20, 20).unwrap();
+        assert!(update_positional_person_tag(&db, tag.id, 60, 60, 20, 20).is_err());
+        assert_eq!(positional_person_tags(&db, &photo).unwrap().len(), 1);
+        let moved = update_positional_person_tag(&db, tag.id, 8, 8, 20, 20).unwrap();
+        let tags = positional_person_tags(&db, &photo).unwrap();
+        assert_eq!((tags.len(), tags[0].id, tags[0].x), (1, moved.id, 8));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recognizes_only_our_copy_temp_names() {
+        assert!(is_copy_temp_name(".VRChat_a.png.copying.123.456"));
+        assert!(is_copy_temp_name(&format!(
+            ".a.jpg.copying.{}",
+            temp_suffix()
+        )));
+        assert!(!is_copy_temp_name(".a.png.copying.123"));
+        assert!(!is_copy_temp_name(".notes.txt.copying.1.2"));
+        assert!(!is_copy_temp_name("a.png.copying.1.2"));
+        assert!(!is_copy_temp_name(".a.png.copying.1.x"));
+    }
+
+    #[test]
+    fn undo_history_is_only_replaced_once_the_old_log_is_gone() {
+        let dir = fresh_dir("fresh-undo");
+        let month = dir.join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let photos: Vec<PathBuf> = (0..2)
+            .map(|index| {
+                let path = month.join(format!("VRChat_2026-10-07_12-00-0{index}.000_8x8.png"));
+                fs::write(&path, vrchat_png(Some("World"), 8, 8)).unwrap();
+                path
+            })
+            .collect();
+        // The old log cannot be removed: the move is rolled back and the
+        // next move must still try to replace the history.
+        fs::create_dir_all(dir.join(UNDO_FILE).join("blocker")).unwrap();
+        let (config, mut stats, mut fresh) = (real_run(&dir), OrganizerStats::default(), true);
+        assert!(
+            organize_single_file_unlocked(&photos[0], &config, &mut stats, &mut fresh).is_err()
+        );
+        assert!(fresh && photos[0].is_file());
+        fs::remove_dir_all(dir.join(UNDO_FILE)).unwrap();
+        log_undo_entry(
+            &dir,
+            &UndoEntry {
+                original_path: "old".to_string(),
+                destination_path: "old".to_string(),
+            },
+        )
+        .unwrap();
+        organize_single_file_unlocked(&photos[1], &config, &mut stats, &mut fresh).unwrap();
+        assert!(!fresh);
+        let log = read_undo_log(&dir).unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(log[0].original_path.ends_with("12-00-01.000_8x8.png"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_chunk_flood_is_bounded() {
+        use flate2::{write::ZlibEncoder, Compression};
+        let dir = fresh_dir("text-flood");
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&vec![b'a'; 1 << 20]).unwrap();
+        let mut ztxt = b"Description\0\0".to_vec();
+        ztxt.extend(encoder.finish().unwrap());
+        let bomb = png_chunk(b"zTXt", &ztxt);
+        let mut png = vrchat_png(None, 2, 2);
+        let flood: Vec<u8> = (0..5000).flat_map(|_| bomb.iter().copied()).collect();
+        png.splice(33..33, flood);
+        let path = dir.join("flood.png");
+        fs::write(&path, png).unwrap();
+        let entries = extract_png_text_chunks(&path).unwrap();
+        let total: usize = entries.iter().map(|entry| entry.value.len()).sum();
+        assert!(entries.len() <= MAX_TEXT_CHUNKS);
+        assert!(total as u64 <= MAX_TEXT_TOTAL, "{total}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metadata_and_tag_store_are_capped() {
+        let players: Vec<_> = (0..300)
+            .map(|index| serde_json::json!({ "displayName": format!("P{index}") }))
+            .chain([serde_json::json!({ "displayName": "x".repeat(81) })])
+            .collect();
+        let json = serde_json::json!({ "world": { "name": "w".repeat(150) }, "players": players });
+        let (world, players) = parse_vrchat_description(&json.to_string()).unwrap();
+        assert_eq!(world.unwrap().chars().count(), MAX_WORLD_NAME);
+        let players = players.unwrap();
+        assert_eq!(players.len(), MAX_PARTICIPANTS);
+        assert!(players.iter().all(|name| name.len() <= 80));
+
+        let dir = fresh_dir("tag-store-validate");
+        let good = "a".repeat(64);
+        fs::write(
+            dir.join(TAG_STORE_FILE),
+            serde_json::json!({ good.clone(): ["Alice", "", "y".repeat(81)], "not-a-hash": ["Bob"] })
+                .to_string(),
+        )
+        .unwrap();
+        let store = load_tag_store(&dir).unwrap();
+        assert_eq!(store.len(), 1);
+        assert_eq!(store[&good], vec!["Alice"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn world_named_like_a_month_organizes_once() {
+        let dir = fresh_dir("month-world");
+        let month = dir.join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let name = "VRChat_2026-10-07_12-00-00.000_8x8.png";
+        fs::write(month.join(name), vrchat_png(Some("2025-01"), 8, 8)).unwrap();
+        let mut first = OrganizerStats::default();
+        organize_path(&real_run(&dir), &mut first).unwrap();
+        assert_eq!(tree(&dir), vec![format!("2026-10/2025-01_/{name}")]);
+        let mut second = OrganizerStats::default();
+        organize_path(&real_run(&dir), &mut second).unwrap();
+        assert_eq!((second.organized, second.already_organized), (0, 1));
+        assert_eq!(sanitize_name("prints"), "prints_");
+        assert_eq!(sanitize_name(THUMBNAIL_DIR), format!("{THUMBNAIL_DIR}_"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_keeps_torn_lines() {
+        let dir = fresh_dir("undo-torn");
+        let base = dir.canonicalize().unwrap();
+        fs::write(base.join("moved.png"), "pixels").unwrap();
+        let entry = UndoEntry {
+            original_path: base.join("original.png").display().to_string(),
+            destination_path: base.join("moved.png").display().to_string(),
+        };
+        fs::write(
+            base.join(UNDO_FILE),
+            format!(
+                "{{\"original_pa\n{}\n",
+                serde_json::to_string(&entry).unwrap()
+            ),
+        )
+        .unwrap();
+        let mut stats = OrganizerStats::default();
+        undo_organization(&base, &mut stats).unwrap();
+        assert_eq!((stats.undone, stats.errors), (1, 1));
+        assert_eq!(
+            fs::read_to_string(base.join(UNDO_FILE)).unwrap(),
+            "{\"original_pa\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn activity_log_failure_does_not_fail_a_run() {
+        let dir = fresh_dir("activity-fail");
+        fs::create_dir_all(dir.join(".vrchat-organizer-activity.json")).unwrap();
+        let mut stats = OrganizerStats::default();
+        organize_path(&real_run(&dir), &mut stats).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decode_refuses_oversized_images() {
+        let dir = fresh_dir("decode-limits");
+        let mut png = PNG_SIGNATURE.to_vec();
+        let mut ihdr = 20_000_u32.to_be_bytes().repeat(2);
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        png.extend(png_chunk(b"IHDR", &ihdr));
+        png.extend(png_chunk(b"IDAT", b"x"));
+        png.extend(png_chunk(b"IEND", b""));
+        let path = dir.join("huge.png");
+        fs::write(&path, png).unwrap();
+        assert!(decode_image(&path).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn orphan_thumbnails_are_removed_only_when_safe() {
+        let dir = fresh_dir("orphans");
+        let thumbs = dir.join(THUMBNAIL_DIR);
+        fs::create_dir_all(&thumbs).unwrap();
+        let stale = thumbs.join("stale.jpg");
+        fs::write(&stale, "old").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        // No photos found: nothing is deleted.
+        scan_library_with_options(&dir, true).unwrap();
+        assert!(stale.exists());
+        fs::write(dir.join("photo.png"), vrchat_png(None, 2, 2)).unwrap();
+        let fresh = thumbs.join("fresh.jpg");
+        fs::write(&fresh, "new").unwrap();
+        // `fresh` is dated after this scan starts only if written during it;
+        // give it a future mtime to stand in for that.
+        fs::File::options()
+            .write(true)
+            .open(&fresh)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+            .unwrap();
+        scan_library_with_options(&dir, true).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_never_redirect_writes_or_moves() {
+        use std::os::unix::fs::symlink;
+        let dir = fresh_dir("symlinks");
+        let outside = fresh_dir("symlinks-outside");
+        let base = dir.canonicalize().unwrap();
+
+        // Undo refuses an original path through a symlinked folder.
+        symlink(&outside, base.join("link")).unwrap();
+        fs::write(base.join("moved.png"), "pixels").unwrap();
+        log_undo_entry(
+            &base,
+            &UndoEntry {
+                original_path: base.join("link/escaped.png").display().to_string(),
+                destination_path: base.join("moved.png").display().to_string(),
+            },
+        )
+        .unwrap();
+        let mut stats = OrganizerStats::default();
+        undo_organization(&base, &mut stats).unwrap();
+        assert_eq!((stats.undone, stats.errors), (0, 1));
+        assert!(base.join("moved.png").is_file());
+        assert!(!outside.join("escaped.png").exists());
+        assert_eq!(read_undo_log(&base).unwrap().len(), 1);
+
+        // App files and the thumbnail folder are never written through symlinks.
+        let target = outside.join("target.json");
+        fs::write(&target, "untouched").unwrap();
+        fs::remove_file(base.join(UNDO_FILE)).unwrap();
+        symlink(&target, base.join(UNDO_FILE)).unwrap();
+        symlink(&target, base.join(TAG_STORE_FILE)).unwrap();
+        let entry = UndoEntry {
+            original_path: "a".to_string(),
+            destination_path: "b".to_string(),
+        };
+        assert!(log_undo_entry(&base, &entry).is_err());
+        assert!(save_tag_store(&base, &HashMap::new()).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
+        symlink(&outside, base.join(THUMBNAIL_DIR)).unwrap();
+        fs::write(base.join("photo.png"), vrchat_png(None, 2, 2)).unwrap();
+        assert!(generate_thumbnail(&base.join("photo.png"), &base).is_err());
+
+        // A symlinked month folder is not organized.
+        let month = outside.join("month");
+        fs::create_dir_all(&month).unwrap();
+        let photo = month.join("VRChat_2026-10-07_12-00-00.000_8x8.png");
+        fs::write(&photo, vrchat_png(Some("World"), 8, 8)).unwrap();
+        symlink(&month, base.join("2026-10")).unwrap();
+        fs::remove_file(base.join(UNDO_FILE)).unwrap();
+        let mut stats = OrganizerStats::default();
+        organize_path(&real_run(&base), &mut stats).unwrap();
+        assert!(photo.is_file());
+        assert_eq!(stats.organized, 0);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    fn proc_io_wchar() -> u64 {
+        fs::read_to_string("/proc/self/io")
+            .ok()
+            .and_then(|io| {
+                io.lines()
+                    .find_map(|line| line.strip_prefix("wchar: ")?.trim().parse().ok())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Synthetic 5,000-photo library benchmark. Run with
+    /// `cargo test --release -p organizer-core perf_harness -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn perf_harness_5000_photos() {
+        let dir =
+            std::env::temp_dir().join(format!("vrchat-organizer-perf-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        for index in 0..5000 {
+            let month = 1 + index % 5;
+            let folder = if index % 10 == 0 {
+                dir.clone()
+            } else {
+                dir.join(format!("2026-{month:02}"))
+            };
+            fs::create_dir_all(&folder).unwrap();
+            let png = vrchat_png(Some(&format!("World {}", index % 50)), 64, 36);
+            fs::write(
+                folder.join(format!(
+                    "VRChat_2026-{month:02}-{:02}_10-{:02}-{:02}.{:03}_64x36.png",
+                    1 + index % 28,
+                    index / 60 % 60,
+                    index % 60,
+                    index % 1000
+                )),
+                png,
+            )
+            .unwrap();
+        }
+        let cache = dir.join("library.sqlite");
+        let started = Instant::now();
+        assert_eq!(
+            scan_library_with_cache(&dir, true, Some(&cache))
+                .unwrap()
+                .total,
+            5000
+        );
+        let cold = started.elapsed();
+        let started = Instant::now();
+        assert_eq!(
+            scan_library_with_cache(&dir, true, Some(&cache))
+                .unwrap()
+                .total,
+            5000
+        );
+        let warm = started.elapsed();
+        let config = OrganizerConfig {
+            base_path: dir.clone(),
+            dry_run: false,
+            scan_all_months: true,
+            single_folder: false,
+            template: "{world}".to_string(),
+        };
+        let mut stats = OrganizerStats::default();
+        let written = proc_io_wchar();
+        let started = Instant::now();
+        organize_path(&config, &mut stats).unwrap();
+        let organize = started.elapsed();
+        let written = proc_io_wchar() - written;
+        let undo_size = fs::metadata(dir.join(".vrchat-organizer-undo.json"))
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
+        let mut undo_stats = OrganizerStats::default();
+        let started = Instant::now();
+        undo_organization(&dir, &mut undo_stats).unwrap();
+        let undo = started.elapsed();
+        println!(
+            "perf: cold_scan={cold:?} warm_scan={warm:?} organize={organize:?} organized={} \
+             bytes_written_during_organize={written} undo_log_bytes={undo_size} undo={undo:?} undone={} {}",
+            stats.organized,
+            undo_stats.undone,
+            fs::read_to_string("/proc/self/status")
+                .unwrap_or_default()
+                .lines()
+                .find(|line| line.starts_with("VmHWM"))
+                .unwrap_or_default()
+        );
+        assert_eq!(stats.organized, 5000);
+        assert_eq!(undo_stats.undone, 5000);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn sanitizes_invalid_path_characters() {
@@ -2277,44 +3686,6 @@ mod tests {
     }
 
     #[test]
-    fn is_already_organized_detects_subfolder() {
-        let config = OrganizerConfig {
-            base_path: PathBuf::from("/tmp/vrchat"),
-            dry_run: false,
-            scan_all_months: false,
-            single_folder: false,
-            template: "{world}".to_string(),
-        };
-        // Inside a non-date world folder → organized
-        assert!(is_already_organized(
-            Path::new("/tmp/vrchat/2025-01/Black Cat/foo.png"),
-            &config
-        ));
-        // Loose file directly in a date folder → NOT organized
-        assert!(!is_already_organized(
-            Path::new("/tmp/vrchat/2025-01/foo.png"),
-            &config
-        ));
-    }
-
-    #[test]
-    fn is_already_organized_loose_root_file_in_single_folder_mode() {
-        let config = OrganizerConfig {
-            base_path: PathBuf::from("/tmp/vrchat"),
-            dry_run: false,
-            scan_all_months: false,
-            single_folder: true,
-            template: "{world}".to_string(),
-        };
-        // A loose file at the base path root must NOT be treated as organized
-        // (this was a bug in single-folder mode).
-        assert!(!is_already_organized(
-            Path::new("/tmp/vrchat/foo.png"),
-            &config
-        ));
-    }
-
-    #[test]
     fn ignores_generated_thumbnail_cache() {
         assert!(is_ignored_path(
             Path::new("/tmp/vrchat/vrchat-organizer-thumbnails/cover.jpg"),
@@ -2354,8 +3725,18 @@ mod tests {
             template: "{world}".to_string(),
         };
         let mut stats = OrganizerStats::default();
+        // A run that moves nothing keeps the previous history...
         organize_path(&config, &mut stats).unwrap();
-        assert!(read_undo_log(&dir).unwrap().is_empty());
+        assert_eq!(read_undo_log(&dir).unwrap().len(), 1);
+        // ...and the first real move of a new run replaces it.
+        let photo = dir.join("VRChat_2026-09-20_10-00-00.000_8x8.png");
+        fs::write(&photo, vrchat_png(Some("World"), 8, 8)).unwrap();
+        organize_path(&config, &mut stats).unwrap();
+        let log = read_undo_log(&dir).unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(log[0]
+            .original_path
+            .ends_with("VRChat_2026-09-20_10-00-00.000_8x8.png"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2373,6 +3754,76 @@ mod tests {
         let month_folder = determine_month_folder(file_path, &config);
 
         assert_eq!(month_folder, PathBuf::from("/tmp/vrchat/2025-01"));
+    }
+
+    #[test]
+    fn vrchat_xmp_world_name_is_read_and_unmangled() {
+        // Shape copied from a real VRChat 2026 screenshot (iTXt, uncompressed).
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description><xmp:CreatorTool>VRChat</xmp:CreatorTool></rdf:Description><rdf:Description xmlns:vrc="http://ns.vrchat.com/vrc/1.0/"><vrc:WorldID>wrld_x</vrc:WorldID><vrc:WorldDisplayName>The Pool Parlor ｜ 8 Ball Pool</vrc:WorldDisplayName></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let mut itxt = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
+        itxt.extend_from_slice(xmp.as_bytes());
+        let mut png = vrchat_png(None, 2, 2);
+        png.splice(33..33, png_chunk(b"iTXt", &itxt));
+        let dir = fresh_dir("xmp-world");
+        let path = dir.join("VRChat_2026-10-07_23-32-04.272_7680x4320.png");
+        fs::write(&path, png).unwrap();
+        let meta = extract_image_meta(&path).unwrap();
+        // Same folder name VRCX's "The Pool Parlor | 8 Ball Pool" sanitizes to.
+        assert_eq!(
+            meta.world_name.as_deref(),
+            Some("The Pool Parlor _ 8 Ball Pool")
+        );
+        assert!(meta.participants.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+
+        for (raw, expected) in [
+            (
+                "Break ＃20 - Hotbox （update July․19）",
+                Some("Break #20 - Hotbox (update July.19)"),
+            ),
+            (
+                "Furality Sylva˸ Lahaina Springs",
+                Some("Furality Sylva_ Lahaina Springs"),
+            ),
+            ("［ HOME ］ YTS‚ Quest ǃ", Some("[ HOME ] YTS, Quest !")),
+            (
+                "Last Generation⁄最後の世代",
+                Some("Last Generation_最後の世代"),
+            ),
+            (
+                "Ｔｏｋｙｏ ２ &amp; Cat&apos;s",
+                Some("Ｔｏｋｙｏ ２ & Cat's"),
+            ),
+            ("   ", None),
+        ] {
+            let xmp = format!("<vrc:WorldDisplayName>{raw}</vrc:WorldDisplayName>");
+            assert_eq!(parse_vrchat_xmp(&xmp).as_deref(), expected, "{raw}");
+        }
+        // Lightroom rewrites XMP into attribute form.
+        assert_eq!(
+            parse_vrchat_xmp(r#"<rdf:Description vrc:WorldDisplayName="Cozy Cabin"/>"#).as_deref(),
+            Some("Cozy Cabin")
+        );
+
+        // VRCX JSON wins over XMP; XMP replaces VRCX's empty world name.
+        let entry = |keyword: &str, value: &str| PngTextEntry {
+            keyword: keyword.to_string(),
+            value: value.to_string(),
+        };
+        let xmp = || {
+            entry(
+                "XML:com.adobe.xmp",
+                "<vrc:WorldDisplayName>From XMP</vrc:WorldDisplayName>",
+            )
+        };
+        let (world, ..) = parse_png_entries(&[
+            xmp(),
+            entry("Description", r#"{"world":{"name":"From VRCX"}}"#),
+        ]);
+        assert_eq!(world.as_deref(), Some("From VRCX"));
+        let (world, ..) =
+            parse_png_entries(&[entry("Description", r#"{"world":{"name":""}}"#), xmp()]);
+        assert_eq!(world.as_deref(), Some("From XMP"));
     }
 
     #[test]
@@ -2423,27 +3874,6 @@ mod tests {
         assert_eq!(world.as_deref(), Some("Black Cat"));
         assert_eq!(participants, vec!["Alice".to_string(), "Bob".to_string()]);
         assert!(tagged_participants.is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn tags_png_participant_without_reencoding_pixels() {
-        let dir =
-            std::env::temp_dir().join(format!("vrchat-organizer-test-tag-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("capture.png");
-        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
-            .save(&path)
-            .unwrap();
-
-        let first = tag_png_participant(&path, "Alice").unwrap();
-        assert_eq!(first, vec!["Alice".to_string()]);
-        let second = tag_png_participant(&path, "alice").unwrap();
-        assert_eq!(second, vec!["Alice".to_string()]);
-        let meta = extract_image_meta(&path).unwrap();
-        assert!(meta.participants.is_empty());
-        assert_eq!(meta.tagged_participants, vec!["Alice".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2537,10 +3967,11 @@ mod tests {
         let world = dir.join("2026-08").join("The Pool Parlor");
         std::fs::create_dir_all(&world).unwrap();
         let path = world.join("VRChat_2026-08-30_21-30-00.000_1920x1080.png");
-        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
-            .save(&path)
-            .unwrap();
-        tag_png_participant(&path, "Ćóâl").unwrap();
+        let mut png = vrchat_png(None, 2, 2);
+        let mut text = ORGANIZER_TAG_PREFIX.to_vec();
+        text.extend_from_slice(r#"["Ćóâl"]"#.as_bytes());
+        png.splice(33..33, png_chunk(b"tEXt", &text));
+        fs::write(&path, png).unwrap();
         let cache = dir.join("library.sqlite");
         let stats = scan_library_with_cache(&dir, true, Some(&cache)).unwrap();
         let photo = stats

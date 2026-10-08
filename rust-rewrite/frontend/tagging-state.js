@@ -42,7 +42,15 @@
   function createTagDialogController(names = []) {
     let selected = [];
     let highlighted = -1;
-    const candidates = () => names;
+    let visible = names.slice();
+    const candidates = () => visible;
+    // The dialog shows a filtered list; keep the highlight on the same person (normalized) or clear it.
+    const setCandidates = list => {
+      const current = highlighted >= 0 ? visible[highlighted] : null;
+      visible = list.slice();
+      highlighted = current === null ? -1 : visible.findIndex(name => normalizeName(name) === normalizeName(current));
+      return visible.slice();
+    };
     const select = name => {
       const display = String(name || '').trim();
       if (display && !selected.some(existing => normalizeName(existing) === normalizeName(display))) {
@@ -65,6 +73,7 @@
       get selected() { return selected.slice(); },
       get highlighted() { return highlighted; },
       select,
+      setCandidates,
       remove,
       move,
       acceptHighlighted

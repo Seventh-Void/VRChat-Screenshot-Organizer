@@ -4,3 +4,10 @@ resolver = "2"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Smaller, faster release binaries. Unwinding stays on: the library-scan
+# runner uses catch_unwind so a panic can't leave it marked busy.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

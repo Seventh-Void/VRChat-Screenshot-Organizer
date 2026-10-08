@@ -4,7 +4,7 @@
 #
 # For a native Windows build, see BUILDING_WINDOWS.md
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -17,22 +17,19 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 [ -n "$VERSION" ] || { echo "Unable to determine application version" >&2; exit 1; }
 RELEASE_DIR="$SCRIPT_DIR/../release/v${VERSION}"
 mkdir -p "$RELEASE_DIR"
-WINDOWS_BINARY="${RELEASE_DIR}/VRChatOrganizer-${VERSION}-windows-x86_64.exe"
+WINDOWS_BINARY="${RELEASE_DIR}/VRChatOrganizer-${VERSION}-windows-x86_64-cli.exe"
 
-# Check if we have the Windows target
-if rustup target list --installed | grep -q "x86_64-pc-windows-gnu"; then
+# Check if we have the Windows target (captured first: grep -q closing the pipe early
+# would fail the pipeline under pipefail).
+INSTALLED_TARGETS="$(rustup target list --installed)"
+if grep -q "x86_64-pc-windows-gnu" <<<"$INSTALLED_TARGETS"; then
   echo ">>> Building Windows binary (x86_64-pc-windows-gnu)..."
-  
-  # Build the organizer-core library for Windows
-  cargo build --release -p organizer-core --target x86_64-pc-windows-gnu
-  
-  # Build the desktop CLI binary for Windows
   cargo build --release -p desktop --target x86_64-pc-windows-gnu
   cp ./target/x86_64-pc-windows-gnu/release/desktop.exe "$WINDOWS_BINARY"
   (
     cd "$RELEASE_DIR"
-    find . -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.msi' \) \
-      -printf '%f\0' | sort -z | xargs -0 sha256sum
+    shopt -s nullglob
+    sha256sum -- *.AppImage *.exe *.msi
   ) > "$RELEASE_DIR/SHA256SUMS"
 
   echo "✅ Windows binaries built!"
